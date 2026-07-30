@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ultimate Frisbee Field Dashboard</title>
+<style>
+  :root {
+    --field-green: #2d7a3e;
+    --field-green-dark: #266834;
+    --endzone-green: #1f5c2c;
+    --line-white: #ffffff;
+    --player-blue: #2563eb;
+    --player-blue-dark: #1d4ed8;
+    --bg: #0f172a;
+    --panel-bg: #1e293b;
+    --text: #e2e8f0;
+    --text-dim: #94a3b8;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px 48px;
+  }
+
+  h1 {
+    font-size: 1.4rem;
+    font-weight: 600;
+    margin: 0 0 4px;
+    letter-spacing: -0.01em;
+  }
+
+  .subtitle {
+    color: var(--text-dim);
+    font-size: 0.9rem;
+    margin: 0 0 20px;
+    text-align: center;
+  }
+
+  .toolbar {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  button {
+    background: var(--panel-bg);
+    color: var(--text);
+    border: 1px solid #334155;
+    padding: 8px 14px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+
+  button:hover {
+    background: #273449;
+    border-color: #475569;
+  }
+
+  button:active {
+    transform: translateY(1px);
+  }
+
+  .field-wrap {
+    position: relative;
+    width: min(92vw, 460px);
+    aspect-ratio: 40 / 70;
+    border-radius: 6px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.45);
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+  }
+
+  svg#field {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  .player {
+    position: absolute;
+    width: 6.5%;
+    aspect-ratio: 1 / 1;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, var(--player-blue-dark), #1e3a8a 70%);
+    border: 2px solid #93c5fd;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.5);
+    transform: translate(-50%, -50%);
+    cursor: grab;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: white;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.6);
+    touch-action: none;
+    transition: box-shadow 0.15s ease;
+  }
+
+  .player.dragging {
+    cursor: grabbing;
+    box-shadow: 0 0 0 4px rgba(147, 197, 253, 0.4), 0 6px 14px rgba(0,0,0,0.6);
+    z-index: 10;
+  }
+
+  .footer-note {
+    margin-top: 16px;
+    color: var(--text-dim);
+    font-size: 0.78rem;
+    text-align: center;
+    max-width: 460px;
+  }
+</style>
+</head>
+<body>
+
+  <h1>Ultimate Frisbee — Offense Setup</h1>
+  <p class="subtitle">Drag the 7 blue dots to position your offensive players</p>
+
+  <div class="toolbar">
+    <button id="resetBtn">Reset Positions</button>
+    <button id="clearBtn">Clear to Bench</button>
+  </div>
+
+  <div class="field-wrap" id="fieldWrap">
+    <svg id="field" viewBox="0 0 400 700" preserveAspectRatio="none">
+      <!-- field background -->
+      <rect x="0" y="0" width="400" height="700" fill="#2d7a3e"/>
+
+      <!-- end zones (each end zone is 20 yards of the 70; playing field is 40x40 wide, but per spec field is 70 tall x 40 wide total incl endzones) -->
+      <rect x="0" y="0" width="400" height="100" fill="#1f5c2c"/>
+      <rect x="0" y="600" width="400" height="100" fill="#1f5c2c"/>
+
+      <!-- brick marks (approx) -->
+      <line x1="190" y1="180" x2="210" y2="180" stroke="#ffffff" stroke-width="2" opacity="0.7"/>
+      <line x1="200" y1="170" x2="200" y2="190" stroke="#ffffff" stroke-width="2" opacity="0.7"/>
+      <line x1="190" y1="520" x2="210" y2="520" stroke="#ffffff" stroke-width="2" opacity="0.7"/>
+      <line x1="200" y1="510" x2="200" y2="530" stroke="#ffffff" stroke-width="2" opacity="0.7"/>
+
+      <!-- boundary lines -->
+      <rect x="2" y="2" width="396" height="696" fill="none" stroke="#ffffff" stroke-width="3"/>
+
+      <!-- goal lines (end zone boundary) -->
+      <line x1="0" y1="100" x2="400" y2="100" stroke="#ffffff" stroke-width="3"/>
+      <line x1="0" y1="600" x2="400" y2="600" stroke="#ffffff" stroke-width="3"/>
+
+      <!-- midfield line -->
+      <line x1="0" y1="350" x2="400" y2="350" stroke="#ffffff" stroke-width="1.5" stroke-dasharray="8 6" opacity="0.6"/>
+    </svg>
+
+    <!-- 7 draggable offensive players -->
+    <div class="player" data-id="1" style="left:30%; top:75%;">1</div>
+    <div class="player" data-id="2" style="left:50%; top:80%;">2</div>
+    <div class="player" data-id="3" style="left:70%; top:75%;">3</div>
+    <div class="player" data-id="4" style="left:25%; top:60%;">4</div>
+    <div class="player" data-id="5" style="left:50%; top:55%;">5</div>
+    <div class="player" data-id="6" style="left:75%; top:60%;">6</div>
+    <div class="player" data-id="7" style="left:50%; top:65%;">7</div>
+  </div>
+
+  <p class="footer-note">
+    Field is regulation ultimate: 70 yd length &times; 40 yd width, oriented vertically with end zones shaded dark green. Drag players anywhere on the field.
+  </p>
+
+<script>
+(function () {
+  const wrap = document.getElementById('fieldWrap');
+  const players = Array.from(document.querySelectorAll('.player'));
+
+  const defaultPositions = players.map(p => ({
+    left: p.style.left,
+    top: p.style.top
+  }));
+
+  function clampPercent(val) {
+    return Math.min(100, Math.max(0, val));
+  }
+
+  function setPositionFromClient(el, clientX, clientY) {
+    const rect = wrap.getBoundingClientRect();
+    let xPct = ((clientX - rect.left) / rect.width) * 100;
+    let yPct = ((clientY - rect.top) / rect.height) * 100;
+    xPct = clampPercent(xPct);
+    yPct = clampPercent(yPct);
+    el.style.left = xPct + '%';
+    el.style.top = yPct + '%';
+  }
+
+  let activePlayer = null;
+
+  function onPointerDown(e) {
+    const el = e.currentTarget;
+    el.classList.add('dragging');
+    activePlayer = el;
+    el.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }
+
+  function onPointerMove(e) {
+    if (!activePlayer) return;
+    setPositionFromClient(activePlayer, e.clientX, e.clientY);
+  }
+
+  function onPointerUp(e) {
+    if (!activePlayer) return;
+    activePlayer.classList.remove('dragging');
+    try { activePlayer.releasePointerCapture(e.pointerId); } catch (err) {}
+    activePlayer = null;
+  }
+
+  players.forEach(p => {
+    p.addEventListener('pointerdown', onPointerDown);
+    p.addEventListener('pointermove', onPointerMove);
+    p.addEventListener('pointerup', onPointerUp);
+    p.addEventListener('pointercancel', onPointerUp);
+  });
+
+  document.getElementById('resetBtn').addEventListener('click', () => {
+    players.forEach((p, i) => {
+      p.style.left = defaultPositions[i].left;
+      p.style.top = defaultPositions[i].top;
+    });
+  });
+
+  document.getElementById('clearBtn').addEventListener('click', () => {
+    players.forEach((p, i) => {
+      const col = (i % 7) * 12 + 8;
+      p.style.left = col + '%';
+      p.style.top = '95%';
+    });
+  });
+})();
+</script>
+
+</body>
+</html>
