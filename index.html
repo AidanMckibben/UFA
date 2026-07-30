@@ -125,12 +125,12 @@
 
   .defender {
     position: absolute;
-    width: 2.4%;
-    height: 8%;
-    border-radius: 3px;
+    width: 1.2%;
+    height: 4%;
+    border-radius: 2px;
     background: linear-gradient(160deg, var(--defender-red), var(--defender-red-dark) 75%);
-    border: 1.5px solid #fca5a5;
-    box-shadow: 0 3px 8px rgba(0,0,0,0.5);
+    border: 1px solid #fca5a5;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.5);
     transform: translate(-50%, -50%);
     cursor: grab;
     touch-action: none;
@@ -337,6 +337,68 @@
     }
   }
 
+  // Defenders are thin rectangles, not circles, so use axis-aligned box overlap
+  // (push apart along whichever axis has the smaller penetration) instead of the
+  // circle-distance model used for offense.
+
+  function getRectPx(el) {
+    const wrapRect = wrap.getBoundingClientRect();
+    const leftPct = parseFloat(el.style.left) || 0;
+    const topPct = parseFloat(el.style.top) || 0;
+    const box = el.getBoundingClientRect();
+    return {
+      x: wrapRect.left + (leftPct / 100) * wrapRect.width,
+      y: wrapRect.top + (topPct / 100) * wrapRect.height,
+      halfW: box.width / 2,
+      halfH: box.height / 2
+    };
+  }
+
+  function resolveDefenderCollisions(activeEl) {
+    const PADDING = 1.15; // slight gap beyond touching edges
+    const MAX_ITERATIONS = 6;
+
+    for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
+      let anyOverlap = false;
+
+      for (let i = 0; i < defenders.length; i++) {
+        for (let j = i + 1; j < defenders.length; j++) {
+          const a = defenders[i];
+          const b = defenders[j];
+
+          const ra = getRectPx(a);
+          const rb = getRectPx(b);
+          const dx = rb.x - ra.x;
+          const dy = rb.y - ra.y;
+          const overlapX = (ra.halfW + rb.halfW) * PADDING - Math.abs(dx);
+          const overlapY = (ra.halfH + rb.halfH) * PADDING - Math.abs(dy);
+
+          if (overlapX > 0 && overlapY > 0) {
+            anyOverlap = true;
+            let pushX = 0, pushY = 0;
+
+            if (overlapX < overlapY) {
+              pushX = (dx < 0 ? -1 : 1) * overlapX;
+            } else {
+              pushY = (dy < 0 ? -1 : 1) * overlapY;
+            }
+
+            if (a === activeEl) {
+              setCenterPx(b, rb.x + pushX, rb.y + pushY);
+            } else if (b === activeEl) {
+              setCenterPx(a, ra.x - pushX, ra.y - pushY);
+            } else {
+              setCenterPx(a, ra.x - pushX / 2, ra.y - pushY / 2);
+              setCenterPx(b, rb.x + pushX / 2, rb.y + pushY / 2);
+            }
+          }
+        }
+      }
+
+      if (!anyOverlap) break;
+    }
+  }
+
   // --- generic drag wiring, parameterized per element type ---
 
   function makeDraggable(el, { onMove, onEnd } = {}) {
@@ -368,7 +430,7 @@
   }
 
   players.forEach(p => makeDraggable(p, { onMove: resolveCollisions }));
-  defenders.forEach(d => makeDraggable(d));
+  defenders.forEach(d => makeDraggable(d, { onMove: resolveDefenderCollisions }));
 
   // --- disc: free-drag, then snaps to the top-right of the nearest offensive player ---
 
