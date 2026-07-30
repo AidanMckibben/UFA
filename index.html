@@ -476,10 +476,19 @@
     }
   }
 
-  // Rotate each defender so its wide face (the long left/right edge, since the
-  // rectangle is tall and narrow) points at whichever offensive player is nearest.
-  // Rotating by the angle to that player aligns the rectangle's local x-axis (its
-  // narrow "chest" axis) toward them, which puts the long edge broadside-on.
+  // Rotate each defender so its front (the local +x direction, an invisible axis —
+  // the rectangle itself is drawn with no visible front/back marking) always points
+  // at whichever offensive player is nearest. Rotating by the angle to that player
+  // aligns the rectangle's local x-axis toward them, which puts the long edge
+  // broadside-on to the offense.
+  //
+  // atan2 alone returns a value in (-180, 180], so as the nearest player's bearing
+  // crosses that +180/-180 seam the raw angle jumps by ~360deg even though the
+  // actual facing barely moved. Unwrapping against each defender's last angle keeps
+  // the CSS rotation transition on the shortest path instead of spinning all the
+  // way around, which is what makes the front's tracking read as seamless.
+
+  const lastFacingAngle = new Map();
 
   function updateDefenderFacings() {
     defenders.forEach(d => {
@@ -498,7 +507,12 @@
 
       if (nearestX === null) return;
 
-      const angleDeg = Math.atan2(nearestY - dc.y, nearestX - dc.x) * (180 / Math.PI);
+      const rawAngle = Math.atan2(nearestY - dc.y, nearestX - dc.x) * (180 / Math.PI);
+      const prevAngle = lastFacingAngle.has(d) ? lastFacingAngle.get(d) : rawAngle;
+      let delta = ((rawAngle - prevAngle + 180) % 360 + 360) % 360 - 180;
+      const angleDeg = prevAngle + delta;
+      lastFacingAngle.set(d, angleDeg);
+
       d.style.transform = `translate(-50%, -50%) rotate(${angleDeg}deg)`;
     });
   }
