@@ -76,6 +76,24 @@
     margin: 6px 0 6px;
   }
 
+  .subheader {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--text-dim);
+    margin: 4px 0 6px 4px;
+    opacity: 0.85;
+  }
+
+  .toggle-btn.active {
+    background: var(--player-blue-dark);
+    border-color: #93c5fd;
+    color: white;
+  }
+
+  .toggle-btn.active:hover {
+    background: var(--player-blue);
+  }
+
   .field-outer {
     flex: 1 1 auto;
     display: flex;
@@ -230,6 +248,23 @@
       <button id="horizontalBtn">Horizontal</button>
       <button id="verticalBtn">Vertical</button>
       <button id="endzoneBtn">Endzone</button>
+    </div>
+
+    <p class="section-header">Defense</p>
+    <div class="toolbar">
+      <button id="resetDefenseBtn">Reset Defense</button>
+    </div>
+
+    <p class="subheader">Downfield</p>
+    <div class="toolbar" id="downfieldToggle">
+      <button class="toggle-btn active" data-value="fronting">Fronting</button>
+      <button class="toggle-btn" data-value="backing">Backing</button>
+    </div>
+
+    <p class="subheader">Mark</p>
+    <div class="toolbar" id="markToggle">
+      <button class="toggle-btn active" data-value="force-backhand">Force Backhand</button>
+      <button class="toggle-btn" data-value="force-flick">Force Flick</button>
     </div>
 
     <p class="footer-note">
@@ -848,11 +883,11 @@
 
   const DEFENDER_GAP = 2; // px clearance between the defender's edge and the player's edge
 
-  function snapDefenderToPlayer(d, target) {
+  function snapDefenderToPlayer(d, target, angle = TOP_RIGHT_ANGLE) {
     const dr = getRectPx(d);
     const tc = getCenterPx(target);
     const offsetDist = tc.radius + Math.max(dr.halfW, dr.halfH) + DEFENDER_GAP;
-    setCenterPx(d, tc.x + Math.cos(TOP_RIGHT_ANGLE) * offsetDist, tc.y + Math.sin(TOP_RIGHT_ANGLE) * offsetDist);
+    setCenterPx(d, tc.x + Math.cos(angle) * offsetDist, tc.y + Math.sin(angle) * offsetDist);
     attach(d, target);
   }
 
@@ -1001,6 +1036,69 @@
       applyFormation(FORMATIONS.vertical);
     }
   });
+
+  // --- Defense: Reset Defense snaps every defender to its matching offensive
+  // player (1:1 by array order, same convention as the Set-up formations), at one
+  // of the four diagonal corners around that player. Which corner depends on two
+  // independent, mutually-exclusive toggle groups:
+  //   Downfield: Fronting -> bottom corner, Backing -> top corner
+  //   Mark: Force Backhand -> left corner, Force Flick -> right corner
+  // The defender marking whoever currently holds the disc is a special case: it
+  // always takes the TOP corner regardless of Downfield, and takes the opposite
+  // side from every other defender (Force Backhand -> the mark goes right instead
+  // of left, Force Flick -> left instead of right).
+
+  const ORIENTATION_ANGLES = {
+    'top-right': -Math.PI / 4,
+    'top-left': -3 * Math.PI / 4,
+    'bottom-right': Math.PI / 4,
+    'bottom-left': 3 * Math.PI / 4
+  };
+
+  function wireToggleGroup(containerId) {
+    const container = document.getElementById(containerId);
+    container.querySelectorAll('.toggle-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        container.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+      });
+    });
+  }
+
+  function getActiveToggleValue(containerId) {
+    return document.querySelector(`#${containerId} .toggle-btn.active`).dataset.value;
+  }
+
+  wireToggleGroup('downfieldToggle');
+  wireToggleGroup('markToggle');
+
+  function getDiscHolderPlayer() {
+    const info = attachments.get(disc);
+    return info ? info.target : null;
+  }
+
+  function resetDefense() {
+    const downfield = getActiveToggleValue('downfieldToggle'); // 'fronting' | 'backing'
+    const mark = getActiveToggleValue('markToggle'); // 'force-backhand' | 'force-flick'
+
+    const mainVertical = downfield === 'fronting' ? 'bottom' : 'top';
+    const mainSide = mark === 'force-backhand' ? 'left' : 'right';
+    const markSide = mark === 'force-backhand' ? 'right' : 'left'; // opposite, for the disc's defender
+
+    const discHolder = getDiscHolderPlayer();
+
+    players.forEach((p, i) => {
+      const d = defenders[i];
+      const isMarkDefender = p === discHolder;
+      const vertical = isMarkDefender ? 'top' : mainVertical;
+      const side = isMarkDefender ? markSide : mainSide;
+      snapDefenderToPlayer(d, p, ORIENTATION_ANGLES[`${vertical}-${side}`]);
+    });
+
+    updateDefenderFacings();
+  }
+
+  document.getElementById('resetDefenseBtn').addEventListener('click', resetDefense);
 })();
 </script>
 
