@@ -131,7 +131,10 @@
 
   .player {
     position: absolute;
-    width: 6.5%;
+    /* Sized from the full-field reference width (set in JS), not a percentage of
+       the CURRENT field-wrap width, so switching to Endzone mode (which widens
+       the field's visible shape) doesn't scale markers up along with it. */
+    width: calc(var(--player-ref-width, 460px) * 0.065);
     aspect-ratio: 1 / 1;
     border-radius: 50%;
     background: radial-gradient(circle at 35% 30%, var(--player-blue-dark), #1e3a8a 70%);
@@ -159,8 +162,9 @@
 
   .defender {
     position: absolute;
-    width: 1.2%;
-    height: 4%;
+    /* Same fixed-reference sizing as .player, see comment there. */
+    width: calc(var(--player-ref-width, 460px) * 0.012);
+    height: calc(var(--player-ref-height, 805px) * 0.04);
     border-radius: 2px;
     background: linear-gradient(160deg, var(--defender-red), var(--defender-red-dark) 75%);
     border: 1px solid #fca5a5;
@@ -181,7 +185,8 @@
 
   .disc {
     position: absolute;
-    width: 3.2%;
+    /* Same fixed-reference sizing as .player, see comment there. */
+    width: calc(var(--player-ref-width, 460px) * 0.032);
     aspect-ratio: 1 / 1;
     border-radius: 50%;
     background: radial-gradient(circle at 35% 30%, #ffffff, #d4d4d8 75%);
@@ -309,6 +314,15 @@
 
     document.documentElement.style.setProperty('--field-budget-h', Math.max(200, availableH) + 'px');
     document.documentElement.style.setProperty('--field-budget-w', Math.max(200, availableW) + 'px');
+
+    // Marker (player/defender/disc) size is pinned to what the field's width
+    // would be in the normal full (40:70) view, regardless of which mode is
+    // actually active, so Endzone mode's wider shape doesn't scale markers up
+    // along with it -- only the field itself zooms, not the pieces on it.
+    const FULL_FIELD_RATIO_WH = 40 / 70;
+    const referenceWidth = Math.min(Math.max(200, availableW), Math.max(200, availableH) * FULL_FIELD_RATIO_WH);
+    document.documentElement.style.setProperty('--player-ref-width', referenceWidth + 'px');
+    document.documentElement.style.setProperty('--player-ref-height', (referenceWidth / FULL_FIELD_RATIO_WH) + 'px');
   }
 
   // Endzone mode zooms the field to just the top half (the top endzone plus the
@@ -543,14 +557,20 @@
   const DEFENDER_HEIGHT_PCT = 4;
 
   function getRectPx(el) {
+    // Position is relative to the CURRENT field-wrap (whatever mode/size it's
+    // actually rendered at), but size uses the fixed reference width/height (see
+    // sizeFieldToViewport) so collision math matches the CSS rule, which pins
+    // marker size to the full-field view regardless of Endzone zoom.
     const wrapRect = wrap.getBoundingClientRect();
     const leftPct = parseFloat(el.style.left) || 0;
     const topPct = parseFloat(el.style.top) || 0;
+    const refWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--player-ref-width')) || wrapRect.width;
+    const refHeight = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--player-ref-height')) || wrapRect.height;
     return {
       x: wrapRect.left + (leftPct / 100) * wrapRect.width,
       y: wrapRect.top + (topPct / 100) * wrapRect.height,
-      halfW: (DEFENDER_WIDTH_PCT / 100 / 2) * wrapRect.width,
-      halfH: (DEFENDER_HEIGHT_PCT / 100 / 2) * wrapRect.height
+      halfW: (DEFENDER_WIDTH_PCT / 100 / 2) * refWidth,
+      halfH: (DEFENDER_HEIGHT_PCT / 100 / 2) * refHeight
     };
   }
 
