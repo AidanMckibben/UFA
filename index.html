@@ -22,16 +22,28 @@
 
   * { box-sizing: border-box; }
 
+  html, body {
+    height: 100%;
+  }
+
   body {
     margin: 0;
-    min-height: 100vh;
     background: var(--bg);
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    gap: 20px;
+    padding: 16px;
+    overflow: hidden;
+  }
+
+  .sidebar {
+    flex: 0 0 240px;
+    display: flex;
     flex-direction: column;
-    align-items: center;
-    padding: 10px 12px;
+    overflow-y: auto;
   }
 
   h1 {
@@ -44,8 +56,7 @@
   .subtitle {
     color: var(--text-dim);
     font-size: 0.78rem;
-    margin: 0 0 10px;
-    text-align: center;
+    margin: 0 0 14px;
   }
 
   .toolbar {
@@ -53,7 +64,7 @@
     gap: 10px;
     margin-bottom: 10px;
     flex-wrap: wrap;
-    justify-content: center;
+    justify-content: flex-start;
   }
 
   .section-header {
@@ -63,7 +74,16 @@
     letter-spacing: 0.06em;
     color: var(--text-dim);
     margin: 6px 0 6px;
-    text-align: center;
+  }
+
+  .field-outer {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
   }
 
   button {
@@ -88,7 +108,7 @@
 
   .field-wrap {
     position: relative;
-    width: min(94vw, calc(var(--field-budget-h, 88vh) * 4 / 7));
+    width: min(var(--field-budget-w, 94vw), calc(var(--field-budget-h, 88vh) * 4 / 7));
     aspect-ratio: 40 / 70;
     border-radius: 6px;
     box-shadow: 0 10px 40px rgba(0,0,0,0.45);
@@ -179,30 +199,37 @@
   }
 
   .footer-note {
-    margin-top: 8px;
+    margin-top: auto;
+    padding-top: 12px;
     color: var(--text-dim);
     font-size: 0.7rem;
-    text-align: center;
-    max-width: 460px;
   }
 </style>
 </head>
 <body>
 
-  <h1>Ultimate Frisbee — Play Setup</h1>
-  <p class="subtitle">Drag the blue dots (offense), red bars (defense), and the disc into position</p>
+  <div class="sidebar">
+    <h1>Ultimate Frisbee — Play Setup</h1>
+    <p class="subtitle">Drag the blue dots (offense), red bars (defense), and the disc into position</p>
 
-  <div class="toolbar">
-    <button id="resetBtn">Reset Positions</button>
-    <button id="clearBtn">Clear to Bench</button>
+    <div class="toolbar">
+      <button id="resetBtn">Reset Positions</button>
+      <button id="clearBtn">Clear to Bench</button>
+    </div>
+
+    <p class="section-header">Set-up</p>
+    <div class="toolbar">
+      <button id="horizontalBtn">Horizontal</button>
+      <button id="verticalBtn">Vertical</button>
+    </div>
+
+    <p class="footer-note">
+      Field is regulation ultimate: 70 yd length &times; 40 yd width, oriented vertically with end zones shaded dark green.
+      Drag offense and defense anywhere; drop the disc and it snaps to the top-right of the nearest offensive player.
+    </p>
   </div>
 
-  <p class="section-header">Set-up</p>
-  <div class="toolbar">
-    <button id="horizontalBtn">Horizontal</button>
-    <button id="verticalBtn">Vertical</button>
-  </div>
-
+  <div class="field-outer" id="fieldOuter">
   <div class="field-wrap" id="fieldWrap">
     <svg id="field" viewBox="0 0 400 700" preserveAspectRatio="none">
       <!-- field background -->
@@ -250,11 +277,7 @@
     <!-- draggable disc; snaps to the top-right of the nearest offensive player on release -->
     <div class="disc" id="disc" style="left:50%; top:55%;"></div>
   </div>
-
-  <p class="footer-note">
-    Field is regulation ultimate: 70 yd length &times; 40 yd width, oriented vertically with end zones shaded dark green.
-    Drag offense and defense anywhere; drop the disc and it snaps to the top-right of the nearest offensive player.
-  </p>
+  </div>
 
 <script>
 (function () {
@@ -263,24 +286,25 @@
   const defenders = Array.from(document.querySelectorAll('.defender'));
   const disc = document.getElementById('disc');
 
-  // The field's width is derived from a height "budget" (--field-budget-h) rather
-  // than a fixed vh guess, since the header/toolbar/footer chrome above and below
-  // it is a roughly fixed pixel height, not proportional to viewport height — a
-  // flat vh percentage either leaves a gap or overflows into a scrollbar depending
-  // on viewport size. Measuring the actual space used by everything else and
-  // handing the remainder to the field lets it fill the viewport top to bottom
-  // exactly, on any screen size.
+  // The field's size is capped by two independently-measured pixel budgets rather
+  // than fixed vw/vh guesses: the sidebar (title, buttons, footer note) sits beside
+  // the field now, not above/below it, so the height budget is just the viewport
+  // minus body padding, and the width budget is whatever horizontal space the
+  // field's flex column actually has left after the sidebar and gap. Measuring
+  // both directly (instead of guessing a vw/vh percentage) means the field fills
+  // exactly the space it's given on any screen size, with no gap and no scrollbar.
   function sizeFieldToViewport() {
-    const footer = document.querySelector('.footer-note');
+    const fieldOuter = document.getElementById('fieldOuter');
     const bodyStyle = getComputedStyle(document.body);
+    const topPad = parseFloat(bodyStyle.paddingTop) || 0;
     const bottomPad = parseFloat(bodyStyle.paddingBottom) || 0;
-    const topOfField = wrap.getBoundingClientRect().top;
-    const footerRect = footer ? footer.getBoundingClientRect() : { height: 0 };
-    const footerMarginTop = footer ? parseFloat(getComputedStyle(footer).marginTop) || 0 : 0;
-    const spaceBelow = footerRect.height + footerMarginTop + bottomPad;
-    const SAFETY_BUFFER = 16; // px, covers rounding and scrollbar-induced reflow
-    const available = window.innerHeight - topOfField - spaceBelow - SAFETY_BUFFER;
-    document.documentElement.style.setProperty('--field-budget-h', Math.max(200, available) + 'px');
+    const SAFETY_BUFFER = 12; // px, covers rounding and scrollbar-induced reflow
+
+    const availableH = window.innerHeight - topPad - bottomPad - SAFETY_BUFFER;
+    const availableW = fieldOuter.getBoundingClientRect().width - SAFETY_BUFFER;
+
+    document.documentElement.style.setProperty('--field-budget-h', Math.max(200, availableH) + 'px');
+    document.documentElement.style.setProperty('--field-budget-w', Math.max(200, availableW) + 'px');
   }
 
   sizeFieldToViewport();
