@@ -131,10 +131,11 @@
     background: linear-gradient(160deg, var(--defender-red), var(--defender-red-dark) 75%);
     border: 1px solid #fca5a5;
     box-shadow: 0 2px 5px rgba(0,0,0,0.5);
-    transform: translate(-50%, -50%);
+    /* transform (translate + rotate-to-face-offense) is set in JS, since the
+       rotation angle changes continuously as positions change */
     cursor: grab;
     touch-action: none;
-    transition: box-shadow 0.15s ease, left 0.09s ease-out, top 0.09s ease-out;
+    transition: box-shadow 0.15s ease, left 0.09s ease-out, top 0.09s ease-out, transform 0.12s ease-out;
   }
 
   .defender.dragging {
@@ -340,17 +341,24 @@
   // Defenders are thin rectangles, not circles, so use axis-aligned box overlap
   // (push apart along whichever axis has the smaller penetration) instead of the
   // circle-distance model used for offense.
+  //
+  // Collision size uses the defender's *nominal* (unrotated) percentage dimensions
+  // rather than getBoundingClientRect(), because once a defender is visually rotated
+  // to face the nearest offensive player, its rendered bounding box is the rotated
+  // AABB (width/height swap or grow toward the diagonal) — not its true footprint.
+
+  const DEFENDER_WIDTH_PCT = 1.2;
+  const DEFENDER_HEIGHT_PCT = 4;
 
   function getRectPx(el) {
     const wrapRect = wrap.getBoundingClientRect();
     const leftPct = parseFloat(el.style.left) || 0;
     const topPct = parseFloat(el.style.top) || 0;
-    const box = el.getBoundingClientRect();
     return {
       x: wrapRect.left + (leftPct / 100) * wrapRect.width,
       y: wrapRect.top + (topPct / 100) * wrapRect.height,
-      halfW: box.width / 2,
-      halfH: box.height / 2
+      halfW: (DEFENDER_WIDTH_PCT / 100 / 2) * wrapRect.width,
+      halfH: (DEFENDER_HEIGHT_PCT / 100 / 2) * wrapRect.height
     };
   }
 
@@ -399,6 +407,102 @@
     }
   }
 
+  // Cross-collision: offense (circle) vs defense (rectangle). Uses the standard
+  // closest-point-on-box-to-circle-center method, with a fallback for the rare
+  // case the circle's center has already ended up inside the box.
+
+  function resolvePlayerDefenderCollisions(activeEl) {
+    const PADDING = 1.08;
+    const MAX_ITERATIONS = 6;
+
+    for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
+      let anyOverlap = false;
+
+      for (let i = 0; i < players.length; i++) {
+        const p = players[i];
+
+        for (let j = 0; j < defenders.length; j++) {
+          const d = defenders[j];
+
+          const pc = getCenterPx(p);
+          const dr = getRectPx(d);
+          const halfW = dr.halfW * PADDING;
+          const halfH = dr.halfH * PADDING;
+
+          const dx = pc.x - dr.x;
+          const dy = pc.y - dr.y;
+          const clampedX = Math.max(-halfW, Math.min(halfW, dx));
+          const clampedY = Math.max(-halfH, Math.min(halfH, dy));
+          const closestX = dr.x + clampedX;
+          const closestY = dr.y + clampedY;
+
+          let nx = pc.x - closestX;
+          let ny = pc.y - closestY;
+          const dist = Math.sqrt(nx * nx + ny * ny);
+          let penetration;
+
+          if (dist > 0.001) {
+            if (dist >= pc.radius) continue; // no overlap
+            penetration = pc.radius - dist;
+            nx /= dist;
+            ny /= dist;
+          } else {
+            // circle center is inside the box: push out along the axis of least penetration
+            const penX = halfW - Math.abs(dx);
+            const penY = halfH - Math.abs(dy);
+            if (penX < penY) {
+              nx = dx < 0 ? -1 : 1; ny = 0;
+              penetration = penX + pc.radius;
+            } else {
+              nx = 0; ny = dy < 0 ? -1 : 1;
+              penetration = penY + pc.radius;
+            }
+          }
+
+          anyOverlap = true;
+
+          if (p === activeEl) {
+            setCenterPx(d, dr.x - nx * penetration, dr.y - ny * penetration);
+          } else if (d === activeEl) {
+            setCenterPx(p, pc.x + nx * penetration, pc.y + ny * penetration);
+          } else {
+            setCenterPx(p, pc.x + nx * penetration / 2, pc.y + ny * penetration / 2);
+            setCenterPx(d, dr.x - nx * penetration / 2, dr.y - ny * penetration / 2);
+          }
+        }
+      }
+
+      if (!anyOverlap) break;
+    }
+  }
+
+  // Rotate each defender so its wide face (the long left/right edge, since the
+  // rectangle is tall and narrow) points at whichever offensive player is nearest.
+  // Rotating by the angle to that player aligns the rectangle's local x-axis (its
+  // narrow "chest" axis) toward them, which puts the long edge broadside-on.
+
+  function updateDefenderFacings() {
+    defenders.forEach(d => {
+      const dc = getRectPx(d);
+      let nearestX = null, nearestY = null, nearestDist = Infinity;
+
+      players.forEach(p => {
+        const pc = getCenterPx(p);
+        const dist = Math.hypot(pc.x - dc.x, pc.y - dc.y);
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearestX = pc.x;
+          nearestY = pc.y;
+        }
+      });
+
+      if (nearestX === null) return;
+
+      const angleDeg = Math.atan2(nearestY - dc.y, nearestX - dc.x) * (180 / Math.PI);
+      d.style.transform = `translate(-50%, -50%) rotate(${angleDeg}deg)`;
+    });
+  }
+
   // --- generic drag wiring, parameterized per element type ---
 
   function makeDraggable(el, { onMove, onEnd } = {}) {
@@ -429,8 +533,20 @@
     el.addEventListener('pointercancel', stop);
   }
 
-  players.forEach(p => makeDraggable(p, { onMove: resolveCollisions }));
-  defenders.forEach(d => makeDraggable(d, { onMove: resolveDefenderCollisions }));
+  function onPlayerMove(el) {
+    resolveCollisions(el);
+    resolvePlayerDefenderCollisions(el);
+    updateDefenderFacings();
+  }
+
+  function onDefenderMove(el) {
+    resolveDefenderCollisions(el);
+    resolvePlayerDefenderCollisions(el);
+    updateDefenderFacings();
+  }
+
+  players.forEach(p => makeDraggable(p, { onMove: onPlayerMove }));
+  defenders.forEach(d => makeDraggable(d, { onMove: onDefenderMove }));
 
   // --- disc: free-drag, then snaps to the top-right of the nearest offensive player ---
 
@@ -461,6 +577,7 @@
   makeDraggable(disc, { onEnd: snapDiscToNearestOffense });
   snapDiscToNearestOffense(); // attach to its starting nearest player on load
   defaultPositions.set(disc, { left: disc.style.left, top: disc.style.top }); // capture post-snap default
+  updateDefenderFacings(); // set initial facing angles
 
   document.getElementById('resetBtn').addEventListener('click', () => {
     [...players, ...defenders, disc].forEach(el => {
@@ -468,6 +585,7 @@
       el.style.left = pos.left;
       el.style.top = pos.top;
     });
+    updateDefenderFacings();
   });
 
   document.getElementById('clearBtn').addEventListener('click', () => {
@@ -483,6 +601,7 @@
     });
     disc.style.left = '50%';
     disc.style.top = '95%';
+    updateDefenderFacings();
   });
 })();
 </script>
