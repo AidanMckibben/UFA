@@ -12,6 +12,8 @@
     --line-white: #ffffff;
     --player-blue: #2563eb;
     --player-blue-dark: #1d4ed8;
+    --defender-red: #ef4444;
+    --defender-red-dark: #b91c1c;
     --bg: #0f172a;
     --panel-bg: #1e293b;
     --text: #e2e8f0;
@@ -121,6 +123,49 @@
     transition: box-shadow 0.15s ease;
   }
 
+  .defender {
+    position: absolute;
+    width: 2.4%;
+    height: 8%;
+    border-radius: 3px;
+    background: linear-gradient(160deg, var(--defender-red), var(--defender-red-dark) 75%);
+    border: 1.5px solid #fca5a5;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.5);
+    transform: translate(-50%, -50%);
+    cursor: grab;
+    touch-action: none;
+    transition: box-shadow 0.15s ease, left 0.09s ease-out, top 0.09s ease-out;
+  }
+
+  .defender.dragging {
+    cursor: grabbing;
+    box-shadow: 0 0 0 4px rgba(252, 165, 165, 0.4), 0 6px 14px rgba(0,0,0,0.6);
+    z-index: 10;
+    transition: box-shadow 0.15s ease;
+  }
+
+  .disc {
+    position: absolute;
+    width: 3.2%;
+    aspect-ratio: 1 / 1;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #ffffff, #d4d4d8 75%);
+    border: 1.5px solid #52525b;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.55);
+    transform: translate(-50%, -50%);
+    cursor: grab;
+    touch-action: none;
+    z-index: 6;
+    transition: box-shadow 0.15s ease, left 0.16s ease-out, top 0.16s ease-out;
+  }
+
+  .disc.dragging {
+    cursor: grabbing;
+    box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.5), 0 6px 14px rgba(0,0,0,0.6);
+    z-index: 12;
+    transition: box-shadow 0.15s ease;
+  }
+
   .footer-note {
     margin-top: 16px;
     color: var(--text-dim);
@@ -132,8 +177,8 @@
 </head>
 <body>
 
-  <h1>Ultimate Frisbee — Offense Setup</h1>
-  <p class="subtitle">Drag the 7 blue dots to position your offensive players</p>
+  <h1>Ultimate Frisbee — Play Setup</h1>
+  <p class="subtitle">Drag the blue dots (offense), red bars (defense), and the disc into position</p>
 
   <div class="toolbar">
     <button id="resetBtn">Reset Positions</button>
@@ -174,21 +219,36 @@
     <div class="player" data-id="5" style="left:50%; top:55%;">5</div>
     <div class="player" data-id="6" style="left:75%; top:60%;">6</div>
     <div class="player" data-id="7" style="left:50%; top:65%;">7</div>
+
+    <!-- 7 draggable defensive markers -->
+    <div class="defender" data-id="1" style="left:34%; top:69%;"></div>
+    <div class="defender" data-id="2" style="left:54%; top:74%;"></div>
+    <div class="defender" data-id="3" style="left:74%; top:69%;"></div>
+    <div class="defender" data-id="4" style="left:29%; top:54%;"></div>
+    <div class="defender" data-id="5" style="left:54%; top:49%;"></div>
+    <div class="defender" data-id="6" style="left:79%; top:54%;"></div>
+    <div class="defender" data-id="7" style="left:54%; top:59%;"></div>
+
+    <!-- draggable disc; snaps to the top-right of the nearest offensive player on release -->
+    <div class="disc" id="disc" style="left:50%; top:55%;"></div>
   </div>
 
   <p class="footer-note">
-    Field is regulation ultimate: 70 yd length &times; 40 yd width, oriented vertically with end zones shaded dark green. Drag players anywhere on the field.
+    Field is regulation ultimate: 70 yd length &times; 40 yd width, oriented vertically with end zones shaded dark green.
+    Drag offense and defense anywhere; drop the disc and it snaps to the top-right of the nearest offensive player.
   </p>
 
 <script>
 (function () {
   const wrap = document.getElementById('fieldWrap');
   const players = Array.from(document.querySelectorAll('.player'));
+  const defenders = Array.from(document.querySelectorAll('.defender'));
+  const disc = document.getElementById('disc');
 
-  const defaultPositions = players.map(p => ({
-    left: p.style.left,
-    top: p.style.top
-  }));
+  const defaultPositions = new Map();
+  [...players, ...defenders].forEach(el => {
+    defaultPositions.set(el, { left: el.style.left, top: el.style.top });
+  });
 
   function clampPercent(val) {
     return Math.min(100, Math.max(0, val));
@@ -277,40 +337,74 @@
     }
   }
 
-  let activePlayer = null;
+  // --- generic drag wiring, parameterized per element type ---
 
-  function onPointerDown(e) {
-    const el = e.currentTarget;
-    el.classList.add('dragging');
-    activePlayer = el;
-    el.setPointerCapture(e.pointerId);
-    e.preventDefault();
+  function makeDraggable(el, { onMove, onEnd } = {}) {
+    let dragging = false;
+
+    el.addEventListener('pointerdown', (e) => {
+      dragging = true;
+      el.classList.add('dragging');
+      el.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    });
+
+    el.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      setPositionFromClient(el, e.clientX, e.clientY);
+      if (onMove) onMove(el);
+    });
+
+    function stop(e) {
+      if (!dragging) return;
+      dragging = false;
+      el.classList.remove('dragging');
+      try { el.releasePointerCapture(e.pointerId); } catch (err) {}
+      if (onEnd) onEnd(el);
+    }
+
+    el.addEventListener('pointerup', stop);
+    el.addEventListener('pointercancel', stop);
   }
 
-  function onPointerMove(e) {
-    if (!activePlayer) return;
-    setPositionFromClient(activePlayer, e.clientX, e.clientY);
-    resolveCollisions(activePlayer);
+  players.forEach(p => makeDraggable(p, { onMove: resolveCollisions }));
+  defenders.forEach(d => makeDraggable(d));
+
+  // --- disc: free-drag, then snaps to the top-right of the nearest offensive player ---
+
+  const DISC_GAP = 3; // px clearance between the disc's edge and the player's edge
+
+  function snapDiscToNearestOffense() {
+    const discCenter = getCenterPx(disc);
+    let nearest = null;
+    let nearestDist = Infinity;
+
+    players.forEach(p => {
+      const c = getCenterPx(p);
+      const d = Math.hypot(c.x - discCenter.x, c.y - discCenter.y);
+      if (d < nearestDist) {
+        nearestDist = d;
+        nearest = p;
+      }
+    });
+
+    if (!nearest) return;
+
+    const nc = getCenterPx(nearest);
+    const offsetDist = nc.radius + discCenter.radius + DISC_GAP;
+    const angle = -Math.PI / 4; // top-right: +x, -y (screen y grows downward)
+    setCenterPx(disc, nc.x + Math.cos(angle) * offsetDist, nc.y + Math.sin(angle) * offsetDist);
   }
 
-  function onPointerUp(e) {
-    if (!activePlayer) return;
-    activePlayer.classList.remove('dragging');
-    try { activePlayer.releasePointerCapture(e.pointerId); } catch (err) {}
-    activePlayer = null;
-  }
-
-  players.forEach(p => {
-    p.addEventListener('pointerdown', onPointerDown);
-    p.addEventListener('pointermove', onPointerMove);
-    p.addEventListener('pointerup', onPointerUp);
-    p.addEventListener('pointercancel', onPointerUp);
-  });
+  makeDraggable(disc, { onEnd: snapDiscToNearestOffense });
+  snapDiscToNearestOffense(); // attach to its starting nearest player on load
+  defaultPositions.set(disc, { left: disc.style.left, top: disc.style.top }); // capture post-snap default
 
   document.getElementById('resetBtn').addEventListener('click', () => {
-    players.forEach((p, i) => {
-      p.style.left = defaultPositions[i].left;
-      p.style.top = defaultPositions[i].top;
+    [...players, ...defenders, disc].forEach(el => {
+      const pos = defaultPositions.get(el);
+      el.style.left = pos.left;
+      el.style.top = pos.top;
     });
   });
 
@@ -320,6 +414,13 @@
       p.style.left = col + '%';
       p.style.top = '95%';
     });
+    defenders.forEach((d, i) => {
+      const col = (i % 7) * 12 + 8;
+      d.style.left = col + '%';
+      d.style.top = '88%';
+    });
+    disc.style.left = '50%';
+    disc.style.top = '95%';
   });
 })();
 </script>
