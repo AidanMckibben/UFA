@@ -111,13 +111,14 @@
     color: white;
     text-shadow: 0 1px 2px rgba(0,0,0,0.6);
     touch-action: none;
-    transition: box-shadow 0.15s ease;
+    transition: box-shadow 0.15s ease, left 0.09s ease-out, top 0.09s ease-out;
   }
 
   .player.dragging {
     cursor: grabbing;
     box-shadow: 0 0 0 4px rgba(147, 197, 253, 0.4), 0 6px 14px rgba(0,0,0,0.6);
     z-index: 10;
+    transition: box-shadow 0.15s ease;
   }
 
   .footer-note {
@@ -203,6 +204,79 @@
     el.style.top = yPct + '%';
   }
 
+  // --- collision / repulsion helpers (px space, so distances match visual circles) ---
+
+  function getCenterPx(el) {
+    // Read the logical left/top (percent of container) rather than the rendered
+    // box, since rendered position lags behind during the CSS position transition.
+    const wrapRect = wrap.getBoundingClientRect();
+    const leftPct = parseFloat(el.style.left) || 0;
+    const topPct = parseFloat(el.style.top) || 0;
+    const radius = el.getBoundingClientRect().width / 2;
+    return {
+      x: wrapRect.left + (leftPct / 100) * wrapRect.width,
+      y: wrapRect.top + (topPct / 100) * wrapRect.height,
+      radius
+    };
+  }
+
+  function setCenterPx(el, x, y) {
+    const wrapRect = wrap.getBoundingClientRect();
+    let xPct = ((x - wrapRect.left) / wrapRect.width) * 100;
+    let yPct = ((y - wrapRect.top) / wrapRect.height) * 100;
+    xPct = clampPercent(xPct);
+    yPct = clampPercent(yPct);
+    el.style.left = xPct + '%';
+    el.style.top = yPct + '%';
+  }
+
+  function resolveCollisions(activeEl) {
+    const PADDING = 1.06; // slight gap beyond touching circles
+    const MAX_ITERATIONS = 6;
+
+    for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
+      let anyOverlap = false;
+
+      for (let i = 0; i < players.length; i++) {
+        for (let j = i + 1; j < players.length; j++) {
+          const a = players[i];
+          const b = players[j];
+
+          const ca = getCenterPx(a);
+          const cb = getCenterPx(b);
+          let dx = cb.x - ca.x;
+          let dy = cb.y - ca.y;
+          let dist = Math.sqrt(dx * dx + dy * dy);
+          const minDist = (ca.radius + cb.radius) * PADDING;
+
+          if (dist < minDist) {
+            anyOverlap = true;
+            let nx, ny;
+            if (dist < 0.001) {
+              // exact overlap: push apart along a stable arbitrary unit direction
+              nx = 1; ny = 0; dist = 0;
+            } else {
+              nx = dx / dist;
+              ny = dy / dist;
+            }
+            const overlap = minDist - dist;
+
+            if (a === activeEl) {
+              setCenterPx(b, cb.x + nx * overlap, cb.y + ny * overlap);
+            } else if (b === activeEl) {
+              setCenterPx(a, ca.x - nx * overlap, ca.y - ny * overlap);
+            } else {
+              setCenterPx(a, ca.x - nx * overlap / 2, ca.y - ny * overlap / 2);
+              setCenterPx(b, cb.x + nx * overlap / 2, cb.y + ny * overlap / 2);
+            }
+          }
+        }
+      }
+
+      if (!anyOverlap) break;
+    }
+  }
+
   let activePlayer = null;
 
   function onPointerDown(e) {
@@ -216,6 +290,7 @@
   function onPointerMove(e) {
     if (!activePlayer) return;
     setPositionFromClient(activePlayer, e.clientX, e.clientY);
+    resolveCollisions(activePlayer);
   }
 
   function onPointerUp(e) {
