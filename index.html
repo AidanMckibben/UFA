@@ -894,11 +894,20 @@
       centerHandlerIndex: 1
     },
     vertical: {
-      // Single handler near the disc, the rest stacked in a vertical line up the
+      // Single handler near the disc, player #2 in the open-side reset position
+      // (45deg behind the handler, ready for a reset pass rather than lined up
+      // straight up the stack), and the rest stacked in a vertical line up the
       // middle of the field.
+      //
+      // positions[1] here is just a fallback; resetIndex tells applyFormation to
+      // recompute it via openSideResetPosition() instead, since a true 45deg angle
+      // depends on the field's real yardage scale, which is different in Endzone
+      // mode (a 35yd-tall view) than in the full 70yd field -- a fixed percentage
+      // can only be exactly 45deg in one of the two.
+      resetIndex: 1,
       positions: [
         { left: '50%', top: '75%' }, // center handler
-        { left: '50%', top: '62%' },
+        { left: '62.5%', top: '82.142857%' }, // open-side reset fallback (45deg, full field)
         { left: '50%', top: '54%' },
         { left: '50%', top: '46%' },
         { left: '50%', top: '38%' },
@@ -909,6 +918,25 @@
     }
   };
 
+  // A given percentage offset is only a fixed real-world angle if it's scaled by
+  // the field's actual yardage in each direction -- the field is always 40yd
+  // wide, but its visible height is 70yd in the full view and 35yd in Endzone
+  // mode, so "yards behind" needs to know which is currently active.
+  const FIELD_WIDTH_YD = 40;
+  const FULL_FIELD_HEIGHT_YD = 70;
+  const ENDZONE_FIELD_HEIGHT_YD = 35;
+  const RESET_OFFSET_YD = 5; // yards behind and yards to the open side (equal, for 45deg)
+
+  function currentFieldHeightYd() {
+    return endzoneMode ? ENDZONE_FIELD_HEIGHT_YD : FULL_FIELD_HEIGHT_YD;
+  }
+
+  function openSideResetPosition(handlerLeftPct, handlerTopPct) {
+    const leftPct = handlerLeftPct + (RESET_OFFSET_YD / FIELD_WIDTH_YD) * 100;
+    const topPct = handlerTopPct + (RESET_OFFSET_YD / currentFieldHeightYd()) * 100;
+    return { left: leftPct + '%', top: topPct + '%' };
+  }
+
   function applyFormation(formation) {
     attachments.clear();
 
@@ -917,6 +945,13 @@
       p.style.left = pos.left;
       p.style.top = pos.top;
     });
+
+    if (formation.resetIndex !== undefined) {
+      const handlerPos = formation.positions[formation.centerHandlerIndex];
+      const resetPos = openSideResetPosition(parseFloat(handlerPos.left), parseFloat(handlerPos.top));
+      players[formation.resetIndex].style.left = resetPos.left;
+      players[formation.resetIndex].style.top = resetPos.top;
+    }
 
     defenders.forEach((d, i) => {
       snapDefenderToPlayer(d, players[i]);
