@@ -291,6 +291,83 @@
     el.style.top = yPct + '%';
   }
 
+  function getLogicalCenter(el) {
+    // Shape-agnostic version of the position part of getCenterPx/getRectPx, for
+    // code that only needs an element's center (defenders and players alike).
+    const wrapRect = wrap.getBoundingClientRect();
+    const leftPct = parseFloat(el.style.left) || 0;
+    const topPct = parseFloat(el.style.top) || 0;
+    return {
+      x: wrapRect.left + (leftPct / 100) * wrapRect.width,
+      y: wrapRect.top + (topPct / 100) * wrapRect.height
+    };
+  }
+
+  // --- grouping: defenders/disc "stick" to whichever offensive player they're
+  // attached to, moving rigidly with it until the user drags that defender/disc
+  // directly. attachments maps the attached element -> { target, offsetX, offsetY },
+  // where offsetX/Y is the fixed displacement from the target player's center,
+  // captured at the moment of attachment.
+
+  const attachments = new Map();
+
+  function attach(el, target) {
+    const elPos = getLogicalCenter(el);
+    const targetPos = getCenterPx(target);
+    attachments.set(el, { target, offsetX: elPos.x - targetPos.x, offsetY: elPos.y - targetPos.y });
+  }
+
+  function detach(el) {
+    attachments.delete(el);
+  }
+
+  function syncAttachments() {
+    attachments.forEach((info, el) => {
+      const targetPos = getCenterPx(info.target);
+      setCenterPx(el, targetPos.x + info.offsetX, targetPos.y + info.offsetY);
+    });
+  }
+
+  // Auto-group: any unattached defender that ends up close enough to touch an
+  // offensive player snaps to it. Reuses the same padded circle-vs-box boundary as
+  // resolvePlayerDefenderCollisions so "touching" lines up with where collision
+  // physics actually settles them, plus a small epsilon since that boundary keeps
+  // a hairline gap rather than true zero-distance contact.
+
+  function checkDefenderAttachments() {
+    const PADDING = 1.08;
+    const ATTACH_EPS = 3; // px
+
+    defenders.forEach(d => {
+      if (attachments.has(d)) return;
+
+      const dr = getRectPx(d);
+      const halfW = dr.halfW * PADDING;
+      const halfH = dr.halfH * PADDING;
+      let closestPlayer = null;
+      let closestGap = Infinity;
+
+      players.forEach(p => {
+        const pc = getCenterPx(p);
+        const dx = pc.x - dr.x;
+        const dy = pc.y - dr.y;
+        const clampedX = Math.max(-halfW, Math.min(halfW, dx));
+        const clampedY = Math.max(-halfH, Math.min(halfH, dy));
+        const closestX = dr.x + clampedX;
+        const closestY = dr.y + clampedY;
+        const gap = Math.hypot(pc.x - closestX, pc.y - closestY) - pc.radius;
+        if (gap < closestGap) {
+          closestGap = gap;
+          closestPlayer = p;
+        }
+      });
+
+      if (closestPlayer && closestGap <= ATTACH_EPS) {
+        attach(d, closestPlayer);
+      }
+    });
+  }
+
   function resolveCollisions(activeEl) {
     const PADDING = 1.06; // slight gap beyond touching circles
     const MAX_ITERATIONS = 6;
@@ -373,6 +450,7 @@
         for (let j = i + 1; j < defenders.length; j++) {
           const a = defenders[i];
           const b = defenders[j];
+          if (attachments.has(a) || attachments.has(b)) continue; // rigidly following instead
 
           const ra = getRectPx(a);
           const rb = getRectPx(b);
@@ -423,6 +501,7 @@
 
         for (let j = 0; j < defenders.length; j++) {
           const d = defenders[j];
+          if (attachments.has(d)) continue; // rigidly following its own target instead
 
           const pc = getCenterPx(p);
           const dr = getRectPx(d);
@@ -519,13 +598,14 @@
 
   // --- generic drag wiring, parameterized per element type ---
 
-  function makeDraggable(el, { onMove, onEnd } = {}) {
+  function makeDraggable(el, { onStart, onMove, onEnd } = {}) {
     let dragging = false;
 
     el.addEventListener('pointerdown', (e) => {
       dragging = true;
       el.classList.add('dragging');
       el.setPointerCapture(e.pointerId);
+      if (onStart) onStart(el);
       e.preventDefault();
     });
 
@@ -550,19 +630,25 @@
   function onPlayerMove(el) {
     resolveCollisions(el);
     resolvePlayerDefenderCollisions(el);
+    syncAttachments(); // carry along anything grouped to a player that just moved
+    checkDefenderAttachments();
     updateDefenderFacings();
   }
 
   function onDefenderMove(el) {
+    // el was just detached in onStart (the user grabbing a defender always breaks
+    // its current group), so it re-enters normal physics for the rest of this drag.
     resolveDefenderCollisions(el);
     resolvePlayerDefenderCollisions(el);
+    syncAttachments();
+    checkDefenderAttachments();
     updateDefenderFacings();
   }
 
   players.forEach(p => makeDraggable(p, { onMove: onPlayerMove }));
-  defenders.forEach(d => makeDraggable(d, { onMove: onDefenderMove }));
+  defenders.forEach(d => makeDraggable(d, { onStart: detach, onMove: onDefenderMove }));
 
-  // --- disc: free-drag, then snaps to the top-right of the nearest offensive player ---
+  // --- disc: free-drag, then snaps to (and groups with) the nearest offensive player ---
 
   const DISC_GAP = 3; // px clearance between the disc's edge and the player's edge
 
@@ -586,23 +672,29 @@
     const offsetDist = nc.radius + discCenter.radius + DISC_GAP;
     const angle = -Math.PI / 4; // top-right: +x, -y (screen y grows downward)
     setCenterPx(disc, nc.x + Math.cos(angle) * offsetDist, nc.y + Math.sin(angle) * offsetDist);
+    attach(disc, nearest); // group with it: it'll be carried along whenever that player moves
   }
 
-  makeDraggable(disc, { onEnd: snapDiscToNearestOffense });
+  makeDraggable(disc, { onStart: detach, onEnd: snapDiscToNearestOffense });
   snapDiscToNearestOffense(); // attach to its starting nearest player on load
   defaultPositions.set(disc, { left: disc.style.left, top: disc.style.top }); // capture post-snap default
+  const defaultDiscTarget = attachments.get(disc).target; // capture which player it's grouped with by default
   updateDefenderFacings(); // set initial facing angles
 
   document.getElementById('resetBtn').addEventListener('click', () => {
+    attachments.clear();
     [...players, ...defenders, disc].forEach(el => {
       const pos = defaultPositions.get(el);
       el.style.left = pos.left;
       el.style.top = pos.top;
     });
+    attach(disc, defaultDiscTarget); // restore the disc's original grouping too
+    checkDefenderAttachments();
     updateDefenderFacings();
   });
 
   document.getElementById('clearBtn').addEventListener('click', () => {
+    attachments.clear();
     players.forEach((p, i) => {
       const col = (i % 7) * 12 + 8;
       p.style.left = col + '%';
