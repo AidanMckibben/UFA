@@ -108,8 +108,11 @@
 
   .field-wrap {
     position: relative;
-    width: min(var(--field-budget-w, 94vw), calc(var(--field-budget-h, 88vh) * 4 / 7));
-    aspect-ratio: 40 / 70;
+    /* --field-ratio-wh is width/height as a plain number (40/70 normally, 40/35
+       when zoomed to just the top half), kept in sync with the aspect-ratio below
+       by setFieldMode() so the width formula always matches the visible shape. */
+    width: min(var(--field-budget-w, 94vw), calc(var(--field-budget-h, 88vh) * var(--field-ratio-wh, 0.571429)));
+    aspect-ratio: var(--field-ar, 40 / 70);
     border-radius: 6px;
     box-shadow: 0 10px 40px rgba(0,0,0,0.45);
     overflow: hidden;
@@ -221,6 +224,7 @@
     <div class="toolbar">
       <button id="horizontalBtn">Horizontal</button>
       <button id="verticalBtn">Vertical</button>
+      <button id="endzoneBtn">Endzone</button>
     </div>
 
     <p class="footer-note">
@@ -305,6 +309,35 @@
 
     document.documentElement.style.setProperty('--field-budget-h', Math.max(200, availableH) + 'px');
     document.documentElement.style.setProperty('--field-budget-w', Math.max(200, availableW) + 'px');
+  }
+
+  // Endzone mode zooms the field to just the top half (the top endzone plus the
+  // near half of the playing field, i.e. y:0-350 of the full 700-unit field).
+  // The SVG viewBox is narrowed so the same 400-unit-wide content simply becomes
+  // taller relative to what's shown, and field-wrap's aspect ratio is widened to
+  // match (40:35 instead of 40:70) so it isn't stretched or letterboxed. Since
+  // preserveAspectRatio="none" was already in place, everything below y=350 (the
+  // far endzone, its brick marks, its goal line) is simply outside the new
+  // viewBox and never rendered -- no need to separately hide those elements.
+  let endzoneMode = false;
+
+  function setFieldMode(mode) {
+    endzoneMode = mode === 'endzone';
+    const svg = document.getElementById('field');
+
+    if (endzoneMode) {
+      svg.setAttribute('viewBox', '0 0 400 350');
+      wrap.classList.add('endzone-mode');
+      wrap.style.setProperty('--field-ratio-wh', 40 / 35);
+      wrap.style.setProperty('--field-ar', '40 / 35');
+    } else {
+      svg.setAttribute('viewBox', '0 0 400 700');
+      wrap.classList.remove('endzone-mode');
+      wrap.style.removeProperty('--field-ratio-wh');
+      wrap.style.removeProperty('--field-ar');
+    }
+
+    sizeFieldToViewport();
   }
 
   sizeFieldToViewport();
@@ -810,6 +843,7 @@
   updateDefenderFacings(); // set initial facing angles
 
   document.getElementById('resetBtn').addEventListener('click', () => {
+    setFieldMode('full');
     attachments.clear();
     [...players, ...defenders, disc].forEach(el => {
       const pos = defaultPositions.get(el);
@@ -822,6 +856,7 @@
   });
 
   document.getElementById('clearBtn').addEventListener('click', () => {
+    setFieldMode('full');
     attachments.clear();
     players.forEach((p, i) => {
       const col = (i % 7) * 12 + 8;
@@ -891,8 +926,26 @@
     updateDefenderFacings();
   }
 
-  document.getElementById('horizontalBtn').addEventListener('click', () => applyFormation(FORMATIONS.horizontal));
-  document.getElementById('verticalBtn').addEventListener('click', () => applyFormation(FORMATIONS.vertical));
+  document.getElementById('horizontalBtn').addEventListener('click', () => {
+    setFieldMode('full');
+    applyFormation(FORMATIONS.horizontal);
+  });
+  document.getElementById('verticalBtn').addEventListener('click', () => {
+    setFieldMode('full');
+    applyFormation(FORMATIONS.vertical);
+  });
+
+  // Endzone is a toggle: pressing it zooms to the top half and lines the offense
+  // up vertically; pressing it again restores the full field (positions stay
+  // wherever they were left, same as toggling doesn't otherwise touch them).
+  document.getElementById('endzoneBtn').addEventListener('click', () => {
+    if (endzoneMode) {
+      setFieldMode('full');
+    } else {
+      setFieldMode('endzone');
+      applyFormation(FORMATIONS.vertical);
+    }
+  });
 })();
 </script>
 
