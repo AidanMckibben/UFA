@@ -31,38 +31,38 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    padding: 24px 16px 48px;
+    padding: 10px 12px;
   }
 
   h1 {
-    font-size: 1.4rem;
+    font-size: 1.1rem;
     font-weight: 600;
-    margin: 0 0 4px;
+    margin: 0 0 2px;
     letter-spacing: -0.01em;
   }
 
   .subtitle {
     color: var(--text-dim);
-    font-size: 0.9rem;
-    margin: 0 0 20px;
+    font-size: 0.78rem;
+    margin: 0 0 10px;
     text-align: center;
   }
 
   .toolbar {
     display: flex;
     gap: 10px;
-    margin-bottom: 18px;
+    margin-bottom: 10px;
     flex-wrap: wrap;
     justify-content: center;
   }
 
   .section-header {
-    font-size: 0.78rem;
+    font-size: 0.72rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-dim);
-    margin: 0 0 8px;
+    margin: 6px 0 6px;
     text-align: center;
   }
 
@@ -88,13 +88,14 @@
 
   .field-wrap {
     position: relative;
-    width: min(92vw, 460px);
+    width: min(94vw, calc(var(--field-budget-h, 88vh) * 4 / 7));
     aspect-ratio: 40 / 70;
     border-radius: 6px;
     box-shadow: 0 10px 40px rgba(0,0,0,0.45);
     overflow: hidden;
     touch-action: none;
     user-select: none;
+    flex-shrink: 0;
   }
 
   svg#field {
@@ -178,9 +179,9 @@
   }
 
   .footer-note {
-    margin-top: 16px;
+    margin-top: 8px;
     color: var(--text-dim);
-    font-size: 0.78rem;
+    font-size: 0.7rem;
     text-align: center;
     max-width: 460px;
   }
@@ -261,6 +262,29 @@
   const players = Array.from(document.querySelectorAll('.player'));
   const defenders = Array.from(document.querySelectorAll('.defender'));
   const disc = document.getElementById('disc');
+
+  // The field's width is derived from a height "budget" (--field-budget-h) rather
+  // than a fixed vh guess, since the header/toolbar/footer chrome above and below
+  // it is a roughly fixed pixel height, not proportional to viewport height — a
+  // flat vh percentage either leaves a gap or overflows into a scrollbar depending
+  // on viewport size. Measuring the actual space used by everything else and
+  // handing the remainder to the field lets it fill the viewport top to bottom
+  // exactly, on any screen size.
+  function sizeFieldToViewport() {
+    const footer = document.querySelector('.footer-note');
+    const bodyStyle = getComputedStyle(document.body);
+    const bottomPad = parseFloat(bodyStyle.paddingBottom) || 0;
+    const topOfField = wrap.getBoundingClientRect().top;
+    const footerRect = footer ? footer.getBoundingClientRect() : { height: 0 };
+    const footerMarginTop = footer ? parseFloat(getComputedStyle(footer).marginTop) || 0 : 0;
+    const spaceBelow = footerRect.height + footerMarginTop + bottomPad;
+    const SAFETY_BUFFER = 16; // px, covers rounding and scrollbar-induced reflow
+    const available = window.innerHeight - topOfField - spaceBelow - SAFETY_BUFFER;
+    document.documentElement.style.setProperty('--field-budget-h', Math.max(200, available) + 'px');
+  }
+
+  sizeFieldToViewport();
+  window.addEventListener('resize', sizeFieldToViewport);
 
   const defaultPositions = new Map();
   [...players, ...defenders].forEach(el => {
