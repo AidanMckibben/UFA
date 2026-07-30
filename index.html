@@ -164,7 +164,7 @@
     position: absolute;
     /* Same fixed-reference sizing as .player, see comment there. */
     width: calc(var(--player-ref-width, 460px) * 0.012);
-    height: calc(var(--player-ref-height, 805px) * 0.04);
+    height: calc(var(--player-ref-height, 805px) * 0.03);
     border-radius: 2px;
     background: linear-gradient(160deg, var(--defender-red), var(--defender-red-dark) 75%);
     border: 1px solid #fca5a5;
@@ -554,7 +554,7 @@
   // AABB (width/height swap or grow toward the diagonal) — not its true footprint.
 
   const DEFENDER_WIDTH_PCT = 1.2;
-  const DEFENDER_HEIGHT_PCT = 4;
+  const DEFENDER_HEIGHT_PCT = 3;
 
   function getRectPx(el) {
     // Position is relative to the CURRENT field-wrap (whatever mode/size it's
