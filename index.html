@@ -328,17 +328,32 @@
     });
   }
 
-  // Auto-group: any unattached defender that ends up close enough to touch an
-  // offensive player snaps to it. Reuses the same padded circle-vs-box boundary as
-  // resolvePlayerDefenderCollisions so "touching" lines up with where collision
-  // physics actually settles them, plus a small epsilon since that boundary keeps
-  // a hairline gap rather than true zero-distance contact.
+  // Auto-group: any unattached defender that ends up truly touching an offensive
+  // player snaps to it. Unlike the collision boundary (which keeps a deliberate
+  // buffer so they never actually overlap), this uses the real, unpadded
+  // circle-vs-box boundary plus a tiny epsilon for settling imprecision, so the
+  // snap only fires once they're actually in contact.
+  //
+  // At most one defender may be snapped to a given offensive player at a time —
+  // players already covered by a different defender are skipped as candidates,
+  // so a second defender bumping into an already-guarded player just bounces off
+  // instead of also grouping.
+  //
+  // excludeEl lets the currently-dragged defender opt out of auto-attaching mid
+  // drag (it gets its own attach attempt at drop instead) so syncAttachments()
+  // doesn't fight the user's live cursor input the instant it touches a player.
 
-  function checkDefenderAttachments() {
-    const PADDING = 1.08;
-    const ATTACH_EPS = 3; // px
+  function checkDefenderAttachments(excludeEl) {
+    const PADDING = 1.0; // true touching boundary, not the collision buffer
+    const ATTACH_EPS = 2; // px, just enough to cover settling imprecision
+
+    const coveredPlayers = new Set();
+    attachments.forEach((info, el) => {
+      if (defenders.includes(el)) coveredPlayers.add(info.target);
+    });
 
     defenders.forEach(d => {
+      if (d === excludeEl) return;
       if (attachments.has(d)) return;
 
       const dr = getRectPx(d);
@@ -348,6 +363,8 @@
       let closestGap = Infinity;
 
       players.forEach(p => {
+        if (coveredPlayers.has(p)) return; // already claimed by a different defender
+
         const pc = getCenterPx(p);
         const dx = pc.x - dr.x;
         const dy = pc.y - dr.y;
@@ -364,6 +381,7 @@
 
       if (closestPlayer && closestGap <= ATTACH_EPS) {
         attach(d, closestPlayer);
+        coveredPlayers.add(closestPlayer); // claim it so no other defender grabs it this same pass
       }
     });
   }
@@ -561,6 +579,11 @@
   // aligns the rectangle's local x-axis toward them, which puts the long edge
   // broadside-on to the offense.
   //
+  // A defender that's snapped to a player always faces that player directly. Every
+  // other (unattached) defender searches for its nearest player as before, but
+  // skips any player already covered by a different defender's snap — an
+  // already-guarded offensive player shouldn't pull other defenders' orientation.
+  //
   // atan2 alone returns a value in (-180, 180], so as the nearest player's bearing
   // crosses that +180/-180 seam the raw angle jumps by ~360deg even though the
   // actual facing barely moved. Unwrapping against each defender's last angle keeps
@@ -570,19 +593,32 @@
   const lastFacingAngle = new Map();
 
   function updateDefenderFacings() {
+    const coveredPlayers = new Set();
+    defenders.forEach(d2 => {
+      if (attachments.has(d2)) coveredPlayers.add(attachments.get(d2).target);
+    });
+
     defenders.forEach(d => {
       const dc = getRectPx(d);
       let nearestX = null, nearestY = null, nearestDist = Infinity;
 
-      players.forEach(p => {
-        const pc = getCenterPx(p);
-        const dist = Math.hypot(pc.x - dc.x, pc.y - dc.y);
-        if (dist < nearestDist) {
-          nearestDist = dist;
-          nearestX = pc.x;
-          nearestY = pc.y;
-        }
-      });
+      if (attachments.has(d)) {
+        const targetPos = getCenterPx(attachments.get(d).target);
+        nearestX = targetPos.x;
+        nearestY = targetPos.y;
+      } else {
+        players.forEach(p => {
+          if (coveredPlayers.has(p)) return; // guarded by a different defender already
+
+          const pc = getCenterPx(p);
+          const dist = Math.hypot(pc.x - dc.x, pc.y - dc.y);
+          if (dist < nearestDist) {
+            nearestDist = dist;
+            nearestX = pc.x;
+            nearestY = pc.y;
+          }
+        });
+      }
 
       if (nearestX === null) return;
 
@@ -638,15 +674,25 @@
   function onDefenderMove(el) {
     // el was just detached in onStart (the user grabbing a defender always breaks
     // its current group), so it re-enters normal physics for the rest of this drag.
+    // It's excluded from auto-attach here so a mid-drag touch doesn't let
+    // syncAttachments() start fighting the user's live cursor input — it gets its
+    // own attach attempt in onDefenderEnd once the user actually lets go, which is
+    // also what lets a snapped defender be dragged into a new snapped orientation
+    // around the same player instead of only ever detaching for good.
     resolveDefenderCollisions(el);
     resolvePlayerDefenderCollisions(el);
     syncAttachments();
+    checkDefenderAttachments(el);
+    updateDefenderFacings();
+  }
+
+  function onDefenderEnd(el) {
     checkDefenderAttachments();
     updateDefenderFacings();
   }
 
   players.forEach(p => makeDraggable(p, { onMove: onPlayerMove }));
-  defenders.forEach(d => makeDraggable(d, { onStart: detach, onMove: onDefenderMove }));
+  defenders.forEach(d => makeDraggable(d, { onStart: detach, onMove: onDefenderMove, onEnd: onDefenderEnd }));
 
   // --- disc: free-drag, then snaps to (and groups with) the nearest offensive player ---
 
