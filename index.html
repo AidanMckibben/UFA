@@ -56,6 +56,16 @@
     justify-content: center;
   }
 
+  .section-header {
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    margin: 0 0 8px;
+    text-align: center;
+  }
+
   button {
     background: var(--panel-bg);
     color: var(--text);
@@ -184,6 +194,12 @@
   <div class="toolbar">
     <button id="resetBtn">Reset Positions</button>
     <button id="clearBtn">Clear to Bench</button>
+  </div>
+
+  <p class="section-header">Set-up</p>
+  <div class="toolbar">
+    <button id="horizontalBtn">Horizontal</button>
+    <button id="verticalBtn">Vertical</button>
   </div>
 
   <div class="field-wrap" id="fieldWrap">
@@ -697,6 +713,15 @@
   // --- disc: free-drag, then snaps to (and groups with) the nearest offensive player ---
 
   const DISC_GAP = 3; // px clearance between the disc's edge and the player's edge
+  const TOP_RIGHT_ANGLE = -Math.PI / 4; // +x, -y (screen y grows downward)
+
+  function snapDiscToPlayer(target) {
+    const discCenter = getCenterPx(disc);
+    const tc = getCenterPx(target);
+    const offsetDist = tc.radius + discCenter.radius + DISC_GAP;
+    setCenterPx(disc, tc.x + Math.cos(TOP_RIGHT_ANGLE) * offsetDist, tc.y + Math.sin(TOP_RIGHT_ANGLE) * offsetDist);
+    attach(disc, target); // group with it: it'll be carried along whenever that player moves
+  }
 
   function snapDiscToNearestOffense() {
     const discCenter = getCenterPx(disc);
@@ -713,12 +738,21 @@
     });
 
     if (!nearest) return;
+    snapDiscToPlayer(nearest);
+  }
 
-    const nc = getCenterPx(nearest);
-    const offsetDist = nc.radius + discCenter.radius + DISC_GAP;
-    const angle = -Math.PI / 4; // top-right: +x, -y (screen y grows downward)
-    setCenterPx(disc, nc.x + Math.cos(angle) * offsetDist, nc.y + Math.sin(angle) * offsetDist);
-    attach(disc, nearest); // group with it: it'll be carried along whenever that player moves
+  // Set-up formations directly assign one defender per offensive player (top-right
+  // of them, per the current placeholder convention) rather than relying on the
+  // touch-based auto-attach, since the formation is being placed all at once.
+
+  const DEFENDER_GAP = 2; // px clearance between the defender's edge and the player's edge
+
+  function snapDefenderToPlayer(d, target) {
+    const dr = getRectPx(d);
+    const tc = getCenterPx(target);
+    const offsetDist = tc.radius + Math.max(dr.halfW, dr.halfH) + DEFENDER_GAP;
+    setCenterPx(d, tc.x + Math.cos(TOP_RIGHT_ANGLE) * offsetDist, tc.y + Math.sin(TOP_RIGHT_ANGLE) * offsetDist);
+    attach(d, target);
   }
 
   makeDraggable(disc, { onStart: detach, onEnd: snapDiscToNearestOffense });
@@ -755,6 +789,62 @@
     disc.style.top = '95%';
     updateDefenderFacings();
   });
+
+  // --- Set-up: formation presets. Each positions all 7 offensive players, assigns
+  // one defender per player (1:1 by array order, currently always placed top-right
+  // per the placeholder convention), and snaps the disc to the formation's
+  // designated center handler.
+
+  const FORMATIONS = {
+    horizontal: {
+      // 3 handlers in a horizontal line near the disc, 4 cutters in a horizontal
+      // line further upfield.
+      positions: [
+        { left: '30%', top: '72%' }, // handler (left)
+        { left: '50%', top: '72%' }, // handler (center) -- center handler
+        { left: '70%', top: '72%' }, // handler (right)
+        { left: '15%', top: '45%' }, // cutter
+        { left: '38%', top: '45%' }, // cutter
+        { left: '62%', top: '45%' }, // cutter
+        { left: '85%', top: '45%' }  // cutter
+      ],
+      centerHandlerIndex: 1
+    },
+    vertical: {
+      // Single handler near the disc, the rest stacked in a vertical line up the
+      // middle of the field.
+      positions: [
+        { left: '50%', top: '75%' }, // center handler
+        { left: '50%', top: '62%' },
+        { left: '50%', top: '54%' },
+        { left: '50%', top: '46%' },
+        { left: '50%', top: '38%' },
+        { left: '50%', top: '30%' },
+        { left: '50%', top: '22%' }
+      ],
+      centerHandlerIndex: 0
+    }
+  };
+
+  function applyFormation(formation) {
+    attachments.clear();
+
+    players.forEach((p, i) => {
+      const pos = formation.positions[i];
+      p.style.left = pos.left;
+      p.style.top = pos.top;
+    });
+
+    defenders.forEach((d, i) => {
+      snapDefenderToPlayer(d, players[i]);
+    });
+
+    snapDiscToPlayer(players[formation.centerHandlerIndex]);
+    updateDefenderFacings();
+  }
+
+  document.getElementById('horizontalBtn').addEventListener('click', () => applyFormation(FORMATIONS.horizontal));
+  document.getElementById('verticalBtn').addEventListener('click', () => applyFormation(FORMATIONS.vertical));
 })();
 </script>
 
