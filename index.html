@@ -247,7 +247,7 @@
     <div class="toolbar">
       <button id="horizontalBtn">Horizontal</button>
       <button id="verticalBtn">Vertical</button>
-      <button id="endzoneBtn">Endzone</button>
+      <button id="endzoneBtn">Endzone Middle</button>
       <button id="sidelineBtn">Endzone Sideline</button>
     </div>
 
@@ -376,6 +376,15 @@
   // thirds of the playing field) is simply outside the new viewBox and never
   // rendered -- no need to separately hide those elements.
   let endzoneMode = false;
+  // Tracks which zoomed-in layout is currently showing ('vertical' for Endzone
+  // Middle, 'sideline' for Endzone Sideline, null when not zoomed at all). This
+  // is what lets Endzone Middle tell the difference between "already showing
+  // Endzone Middle, so toggle back to full size" and "showing some OTHER zoomed
+  // layout (Sideline), so switch to Endzone Middle but stay zoomed" -- keying
+  // the toggle off endzoneMode alone couldn't distinguish those two cases, which
+  // was why switching from Sideline to Endzone Middle used to bounce out to the
+  // full-size field instead of switching formations while staying zoomed.
+  let currentEndzoneFormation = null;
   const ENDZONE_VIEWBOX_HEIGHT = 700 / 3;
   const ENDZONE_RATIO_WH = 12 / 7; // 40yd / (70/3)yd, reduced
 
@@ -393,6 +402,7 @@
       wrap.classList.remove('endzone-mode');
       wrap.style.removeProperty('--field-ratio-wh');
       wrap.style.removeProperty('--field-ar');
+      currentEndzoneFormation = null;
     }
 
     sizeFieldToViewport();
@@ -991,8 +1001,11 @@
     // always the same).
     sideline: (() => {
       const FIELD_W = 40, FIELD_H = 70 / 3;
-      const holderXYd = 36, holderYYd = 18; // 90%, ~77.14%
-      const GAP_TO_FIRST_YD = 5; // "enough space" between the disc and the stack
+      const holderXYd = 36, holderYYd = 20; // 90%, ~85.71% -- pushed deeper to leave
+                                             // room for the larger gap below without
+                                             // the far end of the stack running off
+                                             // the top of the Endzone crop
+      const GAP_TO_FIRST_YD = 8; // "enough space" between the disc and the stack
       const STACK_SPACING_YD = 3;
       const angleRad = 60 * Math.PI / 180;
 
@@ -1066,23 +1079,27 @@
     applyFormation(FORMATIONS.vertical);
   });
 
-  // Endzone is a toggle: pressing it zooms to the top third and lines the offense
-  // up vertically; pressing it again restores the full field (positions stay
-  // wherever they were left, same as toggling doesn't otherwise touch them).
+  // Endzone Middle toggles specifically against ITSELF: pressing it while it's
+  // already the active zoomed layout restores the full field, but pressing it
+  // while some OTHER zoomed layout (Sideline) is showing switches to Endzone
+  // Middle's vertical formation and stays zoomed, rather than bouncing out to
+  // full size.
   document.getElementById('endzoneBtn').addEventListener('click', () => {
-    if (endzoneMode) {
+    if (endzoneMode && currentEndzoneFormation === 'vertical') {
       setFieldMode('full');
     } else {
       setFieldMode('endzone');
       applyFormation(FORMATIONS.vertical);
+      currentEndzoneFormation = 'vertical';
     }
   });
 
   // Endzone Sideline always switches to the zoomed view (it's not a toggle like
-  // Endzone, since its layout only makes sense zoomed in).
+  // Endzone Middle, since its layout only makes sense zoomed in).
   document.getElementById('sidelineBtn').addEventListener('click', () => {
     setFieldMode('endzone');
     applyFormation(FORMATIONS.sideline);
+    currentEndzoneFormation = 'sideline';
   });
 
   // --- Defense: Reset Defense snaps every defender to its matching offensive
