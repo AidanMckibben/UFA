@@ -225,6 +225,15 @@
     transition: box-shadow 0.15s ease;
   }
 
+  .defender.selected {
+    filter: brightness(1.35);
+    box-shadow: 0 0 0 3px rgba(253, 224, 71, 0.85), 0 2px 5px rgba(0,0,0,0.5);
+  }
+
+  .defender.selected.dragging {
+    box-shadow: 0 0 0 3px rgba(253, 224, 71, 0.85), 0 0 0 6px rgba(252, 165, 165, 0.4), 0 6px 14px rgba(0,0,0,0.6);
+  }
+
   .disc {
     position: absolute;
     /* Same fixed-reference sizing as .player, see comment there. */
@@ -863,28 +872,31 @@
     el.addEventListener('pointercancel', stop);
   }
 
-  // --- multi-select: right-click-drag marquee, shift+click, ESC, and dragging a
-  // selected player carries the rest of the selection along with it.
+  // --- multi-select: right-click-drag marquee, shift+click, ESC, left-click on
+  // empty field, and dragging a selected item carries the rest of the selection
+  // along with it. Players and defenders share one selection set so a group can
+  // mix both.
 
-  const selectedPlayers = new Set();
+  const selectedItems = new Set();
   let lastGroupDragLeft = null;
   let lastGroupDragTop = null;
 
   function updateSelectionVisuals() {
-    players.forEach(p => p.classList.toggle('selected', selectedPlayers.has(p)));
+    players.forEach(p => p.classList.toggle('selected', selectedItems.has(p)));
+    defenders.forEach(d => d.classList.toggle('selected', selectedItems.has(d)));
   }
 
   function clearSelection() {
-    if (selectedPlayers.size === 0) return;
-    selectedPlayers.clear();
+    if (selectedItems.size === 0) return;
+    selectedItems.clear();
     updateSelectionVisuals();
   }
 
-  function toggleSelection(p) {
-    if (selectedPlayers.has(p)) {
-      selectedPlayers.delete(p);
+  function toggleSelection(el) {
+    if (selectedItems.has(el)) {
+      selectedItems.delete(el);
     } else {
-      selectedPlayers.add(p);
+      selectedItems.add(el);
     }
     updateSelectionVisuals();
   }
@@ -893,44 +905,64 @@
     if (e.key === 'Escape') clearSelection();
   });
 
-  function onPlayerDragStart(el) {
-    if (!selectedPlayers.has(el)) {
-      // Starting a fresh drag on a player outside the current selection replaces
+  // Left-clicking empty field (not on a player/defender/disc) clears the
+  // selection; clicks that land on a marker are left alone here since
+  // onSelectableDragStart below already handles the click-to-select-just-this
+  // case for markers.
+  wrap.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    if (!e.target.closest('.player, .defender, .disc')) clearSelection();
+  });
+
+  function onSelectableDragStart(el) {
+    if (!selectedItems.has(el)) {
+      // Starting a fresh drag on an item outside the current selection replaces
       // it, same as clicking an unselected item in a typical CAD/office app --
       // otherwise this drag would ambiguously mix an old selection with a new one.
       clearSelection();
+    } else if (selectedItems.size > 1) {
+      // About to move the whole group rigidly by delta -- any other selected
+      // defender needs to be detached first, or syncAttachments() would fight
+      // the manual delta-translation with its own rigid-follow positioning.
+      selectedItems.forEach(other => {
+        if (other !== el && defenders.includes(other)) detach(other);
+      });
     }
     lastGroupDragLeft = parseFloat(el.style.left) || 0;
     lastGroupDragTop = parseFloat(el.style.top) || 0;
+  }
+
+  function applyGroupDragDelta(el) {
+    if (selectedItems.size <= 1 || !selectedItems.has(el)) return;
+
+    const curLeft = parseFloat(el.style.left) || 0;
+    const curTop = parseFloat(el.style.top) || 0;
+    const dLeft = curLeft - lastGroupDragLeft;
+    const dTop = curTop - lastGroupDragTop;
+
+    if (dLeft !== 0 || dTop !== 0) {
+      selectedItems.forEach(other => {
+        if (other === el) return;
+        const oLeft = clampPercent((parseFloat(other.style.left) || 0) + dLeft);
+        const oTop = clampPercent((parseFloat(other.style.top) || 0) + dTop);
+        other.style.left = oLeft + '%';
+        other.style.top = oTop + '%';
+      });
+    }
+
+    lastGroupDragLeft = curLeft;
+    lastGroupDragTop = curTop;
   }
 
   function onPlayerMove(el) {
     resolveCollisions(el);
     resolvePlayerDefenderCollisions(el);
 
-    // Group drag: carry every other selected player along by the same delta this
+    // Group drag: carry every other selected item along by the same delta this
     // frame, so a multi-selection moves as a rigid unit. Collision physics above
     // only ever reasons about the actively-dragged player, so the other members
     // just ride along directly rather than independently colliding.
-    if (selectedPlayers.size > 1 && selectedPlayers.has(el)) {
-      const curLeft = parseFloat(el.style.left) || 0;
-      const curTop = parseFloat(el.style.top) || 0;
-      const dLeft = curLeft - lastGroupDragLeft;
-      const dTop = curTop - lastGroupDragTop;
-
-      if (dLeft !== 0 || dTop !== 0) {
-        selectedPlayers.forEach(other => {
-          if (other === el) return;
-          const oLeft = clampPercent((parseFloat(other.style.left) || 0) + dLeft);
-          const oTop = clampPercent((parseFloat(other.style.top) || 0) + dTop);
-          other.style.left = oLeft + '%';
-          other.style.top = oTop + '%';
-        });
-      }
-
-      lastGroupDragLeft = curLeft;
-      lastGroupDragTop = curTop;
-    }
+    applyGroupDragDelta(el);
 
     syncAttachments(); // carry along anything grouped to a player that just moved
     checkDefenderAttachments();
@@ -947,6 +979,7 @@
     // around the same player instead of only ever detaching for good.
     resolveDefenderCollisions(el);
     resolvePlayerDefenderCollisions(el);
+    applyGroupDragDelta(el);
     syncAttachments();
     checkDefenderAttachments(el);
     updateDefenderFacings();
@@ -957,18 +990,27 @@
     updateDefenderFacings();
   }
 
-  players.forEach(p => makeDraggable(p, {
-    onStart: onPlayerDragStart,
-    onMove: onPlayerMove,
-    canStart: (e) => {
+  function shiftToggleCanStart(el) {
+    return (e) => {
       if (e.shiftKey) {
-        toggleSelection(p); // shift+click only toggles selection, never starts a drag
+        toggleSelection(el); // shift+click only toggles selection, never starts a drag
         return false;
       }
       return true;
-    }
+    };
+  }
+
+  players.forEach(p => makeDraggable(p, {
+    onStart: onSelectableDragStart,
+    onMove: onPlayerMove,
+    canStart: shiftToggleCanStart(p)
   }));
-  defenders.forEach(d => makeDraggable(d, { onStart: detach, onMove: onDefenderMove, onEnd: onDefenderEnd }));
+  defenders.forEach(d => makeDraggable(d, {
+    onStart: (el) => { detach(el); onSelectableDragStart(el); },
+    onMove: onDefenderMove,
+    onEnd: onDefenderEnd,
+    canStart: shiftToggleCanStart(d)
+  }));
 
   // --- disc: free-drag, then snaps to (and groups with) the nearest offensive player ---
 
@@ -1318,10 +1360,12 @@
   document.getElementById('resetDefenseBtn').addEventListener('click', resetDefense);
 
   // --- right-click-drag marquee selection ---
-  // Directional convention: dragging left-to-right selects every player the
-  // rectangle touches at all ("touch" mode); dragging right-to-left selects
-  // only players fully contained within the rectangle ("contain" mode). Shift
-  // held at drag-start adds to the existing selection instead of replacing it.
+  // Standard CAD/Bluebeam convention: dragging left-to-right is a "window"
+  // select -- only items fully CONTAINED in the rectangle qualify; dragging
+  // right-to-left is a "crossing" select -- any item the rectangle TOUCHES at
+  // all qualifies. Shift held at drag-start adds to the existing selection
+  // instead of replacing it. Selectable items are players (circles) and
+  // defenders (rectangles); each gets the geometrically appropriate test.
 
   const selectionRectEl = document.getElementById('selectionRect');
   let marqueeActive = false;
@@ -1337,7 +1381,7 @@
     selectionRectEl.style.top = (Math.min(marqueeStartY, curY) - wrapRect.top) + 'px';
     selectionRectEl.style.width = Math.abs(curX - marqueeStartX) + 'px';
     selectionRectEl.style.height = Math.abs(curY - marqueeStartY) + 'px';
-    selectionRectEl.classList.toggle('contain-mode', curX < marqueeStartX);
+    selectionRectEl.classList.toggle('contain-mode', curX >= marqueeStartX);
   }
 
   wrap.addEventListener('pointerdown', (e) => {
@@ -1356,6 +1400,33 @@
     updateMarqueeRect(e.clientX, e.clientY);
   });
 
+  // A player is a circle {x, y, radius}; a defender is an axis-aligned box
+  // {x, y, halfW, halfH} (its fixed, unrotated footprint, matching how the
+  // rest of the app always treats defender collision -- see getRectPx).
+
+  function itemTouchesRect(el, rectLeft, rectRight, rectTop, rectBottom) {
+    if (defenders.includes(el)) {
+      const r = getRectPx(el);
+      return !(r.x + r.halfW < rectLeft || r.x - r.halfW > rectRight ||
+                r.y + r.halfH < rectTop || r.y - r.halfH > rectBottom);
+    }
+    const c = getCenterPx(el);
+    const clampedX = Math.max(rectLeft, Math.min(rectRight, c.x));
+    const clampedY = Math.max(rectTop, Math.min(rectBottom, c.y));
+    return Math.hypot(c.x - clampedX, c.y - clampedY) <= c.radius;
+  }
+
+  function itemContainedInRect(el, rectLeft, rectRight, rectTop, rectBottom) {
+    if (defenders.includes(el)) {
+      const r = getRectPx(el);
+      return (r.x - r.halfW >= rectLeft) && (r.x + r.halfW <= rectRight) &&
+             (r.y - r.halfH >= rectTop) && (r.y + r.halfH <= rectBottom);
+    }
+    const c = getCenterPx(el);
+    return (c.x - c.radius >= rectLeft) && (c.x + c.radius <= rectRight) &&
+           (c.y - c.radius >= rectTop) && (c.y + c.radius <= rectBottom);
+  }
+
   window.addEventListener('pointerup', (e) => {
     if (!marqueeActive) return;
     marqueeActive = false;
@@ -1366,22 +1437,15 @@
     const rectRight = Math.max(marqueeStartX, e.clientX);
     const rectTop = Math.min(marqueeStartY, e.clientY);
     const rectBottom = Math.max(marqueeStartY, e.clientY);
-    const touchMode = e.clientX >= marqueeStartX; // left-to-right
+    const containMode = e.clientX >= marqueeStartX; // left-to-right = window/contain
 
     if (!marqueeAdditive) clearSelection();
 
-    players.forEach(p => {
-      const c = getCenterPx(p); // page-px {x, y, radius}, same coordinate space as clientX/Y
-      let matches;
-      if (touchMode) {
-        const clampedX = Math.max(rectLeft, Math.min(rectRight, c.x));
-        const clampedY = Math.max(rectTop, Math.min(rectBottom, c.y));
-        matches = Math.hypot(c.x - clampedX, c.y - clampedY) <= c.radius;
-      } else {
-        matches = (c.x - c.radius >= rectLeft) && (c.x + c.radius <= rectRight) &&
-                  (c.y - c.radius >= rectTop) && (c.y + c.radius <= rectBottom);
-      }
-      if (matches) selectedPlayers.add(p);
+    [...players, ...defenders].forEach(el => {
+      const matches = containMode
+        ? itemContainedInRect(el, rectLeft, rectRight, rectTop, rectBottom)
+        : itemTouchesRect(el, rectLeft, rectRight, rectTop, rectBottom);
+      if (matches) selectedItems.add(el);
     });
 
     updateSelectionVisuals();
