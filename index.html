@@ -1052,7 +1052,12 @@
   function snapDefenderToPlayer(d, target, angle = TOP_RIGHT_ANGLE) {
     const dr = getRectPx(d);
     const tc = getCenterPx(target);
-    const offsetDist = tc.radius + Math.max(dr.halfW, dr.halfH) + DEFENDER_GAP;
+    // Use halfW, not the larger of halfW/halfH: updateDefenderFacings() rotates
+    // this defender to face its target along this same angle, meaning its NARROW
+    // (chest) axis is what actually ends up pointed at the player. Using the
+    // longer dimension here left an oversized gap that made formations and Reset
+    // Defense look unsnapped even though the attachment itself was already correct.
+    const offsetDist = tc.radius + dr.halfW + DEFENDER_GAP;
     setCenterPx(d, tc.x + Math.cos(angle) * offsetDist, tc.y + Math.sin(angle) * offsetDist);
     attach(d, target);
   }
@@ -1449,6 +1454,85 @@
     });
 
     updateSelectionVisuals();
+  });
+
+  // --- arrow keys move the disc ---
+  // Up to 2 arrow keys held at once gives 8-directional movement (4 cardinal +
+  // 4 diagonal). Movement is computed in real yards per second and converted to
+  // percentages using the field's CURRENT yardage scale (40yd wide, 70yd or
+  // 70/3yd tall depending on Endzone mode) so it's a true, undistorted 8-way
+  // compass regardless of the field's on-screen aspect ratio, and diagonal
+  // speed is normalized to match the cardinal directions rather than running
+  // sqrt(2) times faster. Holding a key detaches the disc (same as picking it
+  // up to drag); releasing every key snaps it to the nearest offensive player,
+  // same as dropping it.
+
+  const ARROW_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+  const DISC_ARROW_SPEED_YD_PER_SEC = 18;
+  const pressedArrowKeys = new Set();
+  let discArrowRafId = null;
+  let discArrowLastTime = null;
+
+  function discArrowStep(timestamp) {
+    if (discArrowLastTime === null) discArrowLastTime = timestamp;
+    const dtSec = Math.min((timestamp - discArrowLastTime) / 1000, 0.1); // clamp in case of a stall/tab-switch
+    discArrowLastTime = timestamp;
+
+    let dx = 0, dy = 0;
+    if (pressedArrowKeys.has('ArrowLeft')) dx -= 1;
+    if (pressedArrowKeys.has('ArrowRight')) dx += 1;
+    if (pressedArrowKeys.has('ArrowUp')) dy -= 1;
+    if (pressedArrowKeys.has('ArrowDown')) dy += 1;
+
+    if (dx !== 0 || dy !== 0) {
+      const mag = Math.hypot(dx, dy); // 1 for cardinal, sqrt(2) for diagonal
+      const distYd = DISC_ARROW_SPEED_YD_PER_SEC * dtSec;
+      const dxYd = (dx / mag) * distYd;
+      const dyYd = (dy / mag) * distYd;
+      const fieldHeightYd = currentFieldHeightYd();
+
+      const curLeftPct = parseFloat(disc.style.left) || 0;
+      const curTopPct = parseFloat(disc.style.top) || 0;
+      disc.style.left = clampPercent(curLeftPct + (dxYd / FIELD_WIDTH_YD) * 100) + '%';
+      disc.style.top = clampPercent(curTopPct + (dyYd / fieldHeightYd) * 100) + '%';
+    }
+
+    if (pressedArrowKeys.size > 0) {
+      discArrowRafId = requestAnimationFrame(discArrowStep);
+    } else {
+      discArrowRafId = null;
+      discArrowLastTime = null;
+    }
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (!ARROW_KEYS.includes(e.key)) return;
+    e.preventDefault(); // don't scroll the page while steering the disc
+
+    if (pressedArrowKeys.size === 0) detach(disc); // picking up the disc, same as starting a drag
+    if (!pressedArrowKeys.has(e.key)) {
+      pressedArrowKeys.add(e.key);
+      if (discArrowRafId === null) {
+        discArrowLastTime = null;
+        discArrowRafId = requestAnimationFrame(discArrowStep);
+      }
+    }
+  });
+
+  document.addEventListener('keyup', (e) => {
+    if (!ARROW_KEYS.includes(e.key)) return;
+    pressedArrowKeys.delete(e.key);
+    if (pressedArrowKeys.size === 0) snapDiscToNearestOffense(); // dropping the disc, same as releasing a drag
+  });
+
+  // If the window loses focus mid-hold, the matching keyup can be missed
+  // entirely, which would otherwise leave the disc detached and drifting
+  // forever on the last-held direction.
+  window.addEventListener('blur', () => {
+    if (pressedArrowKeys.size > 0) {
+      pressedArrowKeys.clear();
+      snapDiscToNearestOffense();
+    }
   });
 })();
 </script>
