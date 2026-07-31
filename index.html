@@ -265,6 +265,7 @@
     <div class="toolbar" id="markToggle">
       <button class="toggle-btn active" data-value="force-backhand">Force Backhand</button>
       <button class="toggle-btn" data-value="force-flick">Force Flick</button>
+      <button class="toggle-btn" data-value="strongside">Strongside</button>
     </div>
 
     <p class="footer-note">
@@ -1042,11 +1043,21 @@
   // of the four diagonal corners around that player. Which corner depends on two
   // independent, mutually-exclusive toggle groups:
   //   Downfield: Fronting -> bottom corner, Backing -> top corner
-  //   Mark: Force Backhand -> left corner, Force Flick -> right corner
+  //   Mark: Force Backhand -> left corner, Force Flick -> right corner,
+  //         Strongside -> whichever side the disc is currently on (per-defender,
+  //         based on that defender's own offensive player, overriding the fixed
+  //         left/right that Force Backhand/Flick would otherwise give)
   // The defender marking whoever currently holds the disc is a special case: it
-  // always takes the TOP corner regardless of Downfield, and takes the opposite
-  // side from every other defender (Force Backhand -> the mark goes right instead
-  // of left, Force Flick -> left instead of right).
+  // always takes the TOP corner regardless of Downfield, and (for Force Backhand/
+  // Flick) takes the opposite side from every other defender. Under Strongside
+  // there's no fixed "opposite" side to take, so the mark defender falls back to
+  // the same toward-the-disc rule as everyone else.
+  //
+  // On top of all of that, ANY downfield defender whose own offensive player is
+  // at or behind the disc's level, or only up to 5% ahead of it, always takes the
+  // TOP corner too (regardless of Downfield/Fronting-Backing), with the side
+  // picked toward the disc -- a defender that close to the disc doesn't make
+  // sense fronting from below, so this overrides Downfield but not Mark.
 
   const ORIENTATION_ANGLES = {
     'top-right': -Math.PI / 4,
@@ -1077,21 +1088,47 @@
     return info ? info.target : null;
   }
 
+  const NEAR_BEHIND_DISC_MARGIN_PCT = 5; // "up to 5% north of the disc" still counts as behind it
+
+  function sideTowardDisc(offenderLeftPct, discLeftPct) {
+    // Which side puts a defender closer to the disc's current x-position.
+    return discLeftPct < offenderLeftPct ? 'left' : 'right';
+  }
+
   function resetDefense() {
     const downfield = getActiveToggleValue('downfieldToggle'); // 'fronting' | 'backing'
-    const mark = getActiveToggleValue('markToggle'); // 'force-backhand' | 'force-flick'
+    const mark = getActiveToggleValue('markToggle'); // 'force-backhand' | 'force-flick' | 'strongside'
 
     const mainVertical = downfield === 'fronting' ? 'bottom' : 'top';
-    const mainSide = mark === 'force-backhand' ? 'left' : 'right';
-    const markSide = mark === 'force-backhand' ? 'right' : 'left'; // opposite, for the disc's defender
+    const mainSide = mark === 'force-backhand' ? 'left' : 'right'; // unused when mark is strongside
+    const markOppositeSide = mark === 'force-backhand' ? 'right' : 'left'; // unused when mark is strongside
 
     const discHolder = getDiscHolderPlayer();
+    const discLeftPct = parseFloat(disc.style.left) || 0;
+    const discTopPct = parseFloat(disc.style.top) || 0;
 
     players.forEach((p, i) => {
       const d = defenders[i];
-      const isMarkDefender = p === discHolder;
-      const vertical = isMarkDefender ? 'top' : mainVertical;
-      const side = isMarkDefender ? markSide : mainSide;
+      const playerLeftPct = parseFloat(p.style.left) || 0;
+      const playerTopPct = parseFloat(p.style.top) || 0;
+
+      if (p === discHolder) {
+        const side = mark === 'strongside' ? sideTowardDisc(playerLeftPct, discLeftPct) : markOppositeSide;
+        snapDefenderToPlayer(d, p, ORIENTATION_ANGLES[`top-${side}`]);
+        return;
+      }
+
+      const nearOrBehindDisc = (discTopPct - playerTopPct) <= NEAR_BEHIND_DISC_MARGIN_PCT;
+      let vertical, side;
+
+      if (nearOrBehindDisc) {
+        vertical = 'top';
+        side = sideTowardDisc(playerLeftPct, discLeftPct);
+      } else {
+        vertical = mainVertical;
+        side = mark === 'strongside' ? sideTowardDisc(playerLeftPct, discLeftPct) : mainSide;
+      }
+
       snapDefenderToPlayer(d, p, ORIENTATION_ANGLES[`${vertical}-${side}`]);
     });
 
