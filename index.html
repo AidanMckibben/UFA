@@ -881,6 +881,16 @@
   let lastGroupDragLeft = null;
   let lastGroupDragTop = null;
 
+  // Tracked continuously so the 'L' align-to-trend-line shortcut (below) can
+  // read the cursor's position at the moment the key is pressed, since a
+  // keydown event carries no coordinates of its own.
+  let lastCursorClientX = null;
+  let lastCursorClientY = null;
+  window.addEventListener('pointermove', (e) => {
+    lastCursorClientX = e.clientX;
+    lastCursorClientY = e.clientY;
+  });
+
   function updateSelectionVisuals() {
     players.forEach(p => p.classList.toggle('selected', selectedItems.has(p)));
     defenders.forEach(d => d.classList.toggle('selected', selectedItems.has(d)));
@@ -1069,6 +1079,60 @@
     checkDefenderAttachments();
     updateDefenderFacings();
   }
+
+  // Pressing 'L' with multiple players selected snaps them onto a single
+  // (invisible) straight line: the orthogonal-regression ("total least
+  // squares") best-fit line through the selected players' current positions
+  // AND the cursor's position at the moment the key is pressed. Orthogonal
+  // regression -- rather than an ordinary vertical/horizontal least-squares
+  // fit -- is what makes each player's move onto the line the shortest
+  // (perpendicular) distance, and including the cursor as one of the fitted
+  // points lets the user steer the line's angle without moving any player
+  // there themselves. Done in px space (via getCenterPx/setCenterPx) so the
+  // fit and each projection reflect true on-screen distance, not raw
+  // left/top percentages distorted by the field's non-square aspect ratio.
+  function alignSelectedPlayersToTrendLine() {
+    const selectedPlayers = players.filter(p => selectedItems.has(p));
+    if (selectedPlayers.length < 2) return;
+    if (lastCursorClientX === null || lastCursorClientY === null) return;
+
+    const points = selectedPlayers.map(p => getCenterPx(p));
+    points.push({ x: lastCursorClientX, y: lastCursorClientY });
+
+    const n = points.length;
+    const meanX = points.reduce((sum, pt) => sum + pt.x, 0) / n;
+    const meanY = points.reduce((sum, pt) => sum + pt.y, 0) / n;
+
+    let sxx = 0, syy = 0, sxy = 0;
+    points.forEach(pt => {
+      const dx = pt.x - meanX;
+      const dy = pt.y - meanY;
+      sxx += dx * dx;
+      syy += dy * dy;
+      sxy += dx * dy;
+    });
+    if (sxx === 0 && syy === 0) return; // every point coincides -- no defined line
+
+    const angle = 0.5 * Math.atan2(2 * sxy, sxx - syy); // principal-axis direction
+    const dirX = Math.cos(angle);
+    const dirY = Math.sin(angle);
+
+    selectedPlayers.forEach((p, i) => {
+      const pt = points[i]; // points[0..selectedPlayers.length-1] line up with selectedPlayers; the cursor is the extra trailing point
+      const t = (pt.x - meanX) * dirX + (pt.y - meanY) * dirY; // scalar projection onto the line
+      setCenterPx(p, meanX + t * dirX, meanY + t * dirY);
+    });
+
+    syncAttachments();
+    checkDefenderAttachments();
+    updateDefenderFacings();
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() !== 'l') return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return; // don't hijack browser shortcuts
+    alignSelectedPlayersToTrendLine();
+  });
 
   players.forEach(p => makeDraggable(p, {
     onStart: onSelectableDragStart,
