@@ -306,6 +306,13 @@
       <button class="toggle-btn" id="strongsideToggle">Strongside</button>
     </div>
 
+    <p class="section-header">Tools</p>
+    <div class="toolbar">
+      <button id="alignBtn">Align [L]</button>
+      <button id="pushBtn">Push [P]</button>
+      <button id="pullBtn">Pull [O]</button>
+    </div>
+
     <p class="footer-note">
       Field is regulation ultimate: 70 yd length &times; 40 yd width, oriented vertically with end zones shaded dark green.
       Drag offense and defense anywhere; drop the disc and it snaps to the top-right of the nearest offensive player.
@@ -1080,24 +1087,24 @@
     updateDefenderFacings();
   }
 
-  // Pressing 'L' with multiple players selected snaps them onto a single
-  // (invisible) straight line: the orthogonal-regression ("total least
-  // squares") best-fit line through the selected players' current positions
-  // AND the cursor's position at the moment the key is pressed. Orthogonal
-  // regression -- rather than an ordinary vertical/horizontal least-squares
-  // fit -- is what makes each player's move onto the line the shortest
-  // (perpendicular) distance, and including the cursor as one of the fitted
-  // points lets the user steer the line's angle without moving any player
-  // there themselves. Done in px space (via getCenterPx/setCenterPx) so the
-  // fit and each projection reflect true on-screen distance, not raw
-  // left/top percentages distorted by the field's non-square aspect ratio.
-  function alignSelectedPlayersToTrendLine() {
-    const selectedPlayers = players.filter(p => selectedItems.has(p));
-    if (selectedPlayers.length < 2) return;
-    if (lastCursorClientX === null || lastCursorClientY === null) return;
+  // Shared by Align/Push/Pull below: fits the orthogonal-regression ("total
+  // least squares") best-fit line through the selected players' current
+  // positions AND the cursor's position at the moment the key/button is
+  // used. Orthogonal regression -- rather than an ordinary vertical/
+  // horizontal least-squares fit -- is what makes distance-to-the-line a
+  // true shortest (perpendicular) distance, and including the cursor as one
+  // of the fitted points lets the user steer the line's angle without
+  // moving any player there themselves. Done in px space (via getCenterPx)
+  // so the fit reflects true on-screen distance, not raw left/top
+  // percentages distorted by the field's non-square aspect ratio. Returns
+  // null if there are fewer than 2 selected players, the cursor has never
+  // moved, or every point coincides (no line is defined).
+  function computeSelectionTrendLine(selectedPlayers) {
+    if (selectedPlayers.length < 2) return null;
+    if (lastCursorClientX === null || lastCursorClientY === null) return null;
 
-    const points = selectedPlayers.map(p => getCenterPx(p));
-    points.push({ x: lastCursorClientX, y: lastCursorClientY });
+    const playerPts = selectedPlayers.map(p => getCenterPx(p));
+    const points = playerPts.concat([{ x: lastCursorClientX, y: lastCursorClientY }]);
 
     const n = points.length;
     const meanX = points.reduce((sum, pt) => sum + pt.x, 0) / n;
@@ -1111,14 +1118,23 @@
       syy += dy * dy;
       sxy += dx * dy;
     });
-    if (sxx === 0 && syy === 0) return; // every point coincides -- no defined line
+    if (sxx === 0 && syy === 0) return null; // every point coincides -- no defined line
 
     const angle = 0.5 * Math.atan2(2 * sxy, sxx - syy); // principal-axis direction
-    const dirX = Math.cos(angle);
-    const dirY = Math.sin(angle);
+    return { playerPts, meanX, meanY, dirX: Math.cos(angle), dirY: Math.sin(angle) };
+  }
+
+  // Pressing 'L' (or the Align button) with multiple players selected snaps
+  // them onto the trend line computed above -- each moves the shortest
+  // (perpendicular) distance onto it.
+  function alignSelectedPlayersToTrendLine() {
+    const selectedPlayers = players.filter(p => selectedItems.has(p));
+    const line = computeSelectionTrendLine(selectedPlayers);
+    if (!line) return;
+    const { playerPts, meanX, meanY, dirX, dirY } = line;
 
     selectedPlayers.forEach((p, i) => {
-      const pt = points[i]; // points[0..selectedPlayers.length-1] line up with selectedPlayers; the cursor is the extra trailing point
+      const pt = playerPts[i]; // lines up with selectedPlayers -- the cursor point computeSelectionTrendLine appended isn't in this array
       const t = (pt.x - meanX) * dirX + (pt.y - meanY) * dirY; // scalar projection onto the line
       setCenterPx(p, meanX + t * dirX, meanY + t * dirY);
     });
@@ -1128,11 +1144,80 @@
     updateDefenderFacings();
   }
 
+  // Pressing 'P'/'O' (or the Push/Pull buttons) with multiple players
+  // selected spreads them apart or draws them together along the same
+  // trend line, WITHOUT snapping them fully onto it -- each player keeps its
+  // perpendicular offset from the line and only slides along it, so Push/
+  // Pull composes naturally with players that haven't been Aligned first.
+  //
+  // Each press moves every selected player only part of the way (SPACING_RELAX)
+  // toward an ideal target -- evenly-spaced points spanning a slightly
+  // larger/smaller range (by SPACING_STEP_FACTOR) centered on the group's
+  // current midpoint -- rather than jumping straight to that target. That
+  // partial-step interpolation is what makes a single press feel gradual,
+  // makes uneven gaps visibly converge toward equal over a few repeated
+  // presses rather than snapping even instantly, and keeps how far any one
+  // player moves in a single press proportional to its own distance from
+  // the ideal (never wildly more than its neighbors).
+  const SPACING_STEP_FACTOR = 0.3; // how much the overall span grows/shrinks, before damping, each press
+  const SPACING_RELAX = 0.4; // fraction of the way each player moves toward that press's ideal target
+  const SPACING_MIN_SPAN_PX = 24; // fallback seed span so Push still separates players that are exactly on top of each other
+
+  function pushOrPullSelectedPlayers(direction) {
+    const selectedPlayers = players.filter(p => selectedItems.has(p));
+    const line = computeSelectionTrendLine(selectedPlayers);
+    if (!line) return;
+    const { playerPts, meanX, meanY, dirX, dirY } = line;
+
+    const entries = selectedPlayers.map((p, i) => {
+      const pt = playerPts[i];
+      const t = (pt.x - meanX) * dirX + (pt.y - meanY) * dirY;
+      return {
+        p,
+        t,
+        // Perpendicular (off-line) offset, preserved so this player only
+        // slides along the line's direction rather than snapping onto it.
+        perpX: pt.x - (meanX + t * dirX),
+        perpY: pt.y - (meanY + t * dirY)
+      };
+    }).sort((a, b) => a.t - b.t);
+
+    const m = entries.length;
+    const tMin = entries[0].t;
+    const tMax = entries[m - 1].t;
+    const span = tMax - tMin;
+    const center = (tMin + tMax) / 2;
+
+    let newSpan;
+    if (span < 1e-6) {
+      if (direction < 0) return; // already fully together; nothing left to pull
+      newSpan = SPACING_MIN_SPAN_PX;
+    } else {
+      newSpan = Math.max(0, span * (1 + direction * SPACING_STEP_FACTOR));
+    }
+
+    entries.forEach((entry, i) => {
+      const idealT = center - newSpan / 2 + i * (newSpan / (m - 1));
+      const newT = entry.t + SPACING_RELAX * (idealT - entry.t);
+      setCenterPx(entry.p, meanX + newT * dirX + entry.perpX, meanY + newT * dirY + entry.perpY);
+    });
+
+    syncAttachments();
+    checkDefenderAttachments();
+    updateDefenderFacings();
+  }
+
   document.addEventListener('keydown', (e) => {
-    if (e.key.toLowerCase() !== 'l') return;
     if (e.ctrlKey || e.metaKey || e.altKey) return; // don't hijack browser shortcuts
-    alignSelectedPlayersToTrendLine();
+    const key = e.key.toLowerCase();
+    if (key === 'l') alignSelectedPlayersToTrendLine();
+    else if (key === 'p') pushOrPullSelectedPlayers(1);
+    else if (key === 'o') pushOrPullSelectedPlayers(-1);
   });
+
+  document.getElementById('alignBtn').addEventListener('click', alignSelectedPlayersToTrendLine);
+  document.getElementById('pushBtn').addEventListener('click', () => pushOrPullSelectedPlayers(1));
+  document.getElementById('pullBtn').addEventListener('click', () => pushOrPullSelectedPlayers(-1));
 
   players.forEach(p => makeDraggable(p, {
     onStart: onSelectableDragStart,
