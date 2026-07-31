@@ -248,6 +248,7 @@
       <button id="horizontalBtn">Horizontal</button>
       <button id="verticalBtn">Vertical</button>
       <button id="endzoneBtn">Endzone</button>
+      <button id="sidelineBtn">Endzone Sideline</button>
     </div>
 
     <p class="section-header">Defense</p>
@@ -965,8 +966,8 @@
       // positions[1] here is just a fallback; resetIndex tells applyFormation to
       // recompute it via openSideResetPosition() instead, since a true 45deg angle
       // depends on the field's real yardage scale, which is different in Endzone
-      // mode (a 35yd-tall view) than in the full 70yd field -- a fixed percentage
-      // can only be exactly 45deg in one of the two.
+      // mode (a 23.33yd-tall view, the top third) than in the full 70yd field --
+      // a fixed percentage can only be exactly 45deg in one of the two.
       resetIndex: 1,
       positions: [
         { left: '50%', top: '75%' }, // center handler
@@ -978,7 +979,39 @@
         { left: '50%', top: '22%' }
       ],
       centerHandlerIndex: 0
-    }
+    },
+    // Endzone-only: disc holder on the right sideline, a second player horizontal
+    // in-line with them at field center, and the remaining 5 stacked along a
+    // single straight line through the disc holder at 60deg from the x-axis,
+    // leaning toward the far (left) sideline as it goes upfield (toward smaller
+    // top%). Computed in real yards (40yd wide x 23.33yd tall, the Endzone top
+    // third) so the 60deg angle and spacing are geometrically exact rather than
+    // just visually close, then converted to percentages here as fixed values
+    // (this formation is only ever applied in Endzone mode, so the scale is
+    // always the same).
+    sideline: (() => {
+      const FIELD_W = 40, FIELD_H = 70 / 3;
+      const holderXYd = 36, holderYYd = 18; // 90%, ~77.14%
+      const GAP_TO_FIRST_YD = 5; // "enough space" between the disc and the stack
+      const STACK_SPACING_YD = 3;
+      const angleRad = 60 * Math.PI / 180;
+
+      const stackPositions = [0, 1, 2, 3, 4].map(i => {
+        const dist = GAP_TO_FIRST_YD + i * STACK_SPACING_YD;
+        const xYd = holderXYd - dist * Math.cos(angleRad); // toward the far (left) sideline
+        const yYd = holderYYd - dist * Math.sin(angleRad); // upfield
+        return { left: (xYd / FIELD_W * 100) + '%', top: (yYd / FIELD_H * 100) + '%' };
+      });
+
+      return {
+        positions: [
+          { left: (holderXYd / FIELD_W * 100) + '%', top: (holderYYd / FIELD_H * 100) + '%' }, // disc holder, right sideline
+          { left: '50%', top: (holderYYd / FIELD_H * 100) + '%' }, // center pair, in-line horizontally with the holder
+          ...stackPositions
+        ],
+        centerHandlerIndex: 0
+      };
+    })()
   };
 
   // A given percentage offset is only a fixed real-world angle if it's scaled by
@@ -1033,7 +1066,7 @@
     applyFormation(FORMATIONS.vertical);
   });
 
-  // Endzone is a toggle: pressing it zooms to the top half and lines the offense
+  // Endzone is a toggle: pressing it zooms to the top third and lines the offense
   // up vertically; pressing it again restores the full field (positions stay
   // wherever they were left, same as toggling doesn't otherwise touch them).
   document.getElementById('endzoneBtn').addEventListener('click', () => {
@@ -1043,6 +1076,13 @@
       setFieldMode('endzone');
       applyFormation(FORMATIONS.vertical);
     }
+  });
+
+  // Endzone Sideline always switches to the zoomed view (it's not a toggle like
+  // Endzone, since its layout only makes sense zoomed in).
+  document.getElementById('sidelineBtn').addEventListener('click', () => {
+    setFieldMode('endzone');
+    applyFormation(FORMATIONS.sideline);
   });
 
   // --- Defense: Reset Defense snaps every defender to its matching offensive
