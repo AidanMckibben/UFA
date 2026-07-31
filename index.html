@@ -178,6 +178,30 @@
     transition: box-shadow 0.15s ease;
   }
 
+  .player.selected {
+    filter: brightness(1.35);
+    box-shadow: 0 0 0 3px rgba(253, 224, 71, 0.85), 0 3px 8px rgba(0,0,0,0.5);
+  }
+
+  .player.selected.dragging {
+    box-shadow: 0 0 0 3px rgba(253, 224, 71, 0.85), 0 0 0 6px rgba(147, 197, 253, 0.4), 0 6px 14px rgba(0,0,0,0.6);
+  }
+
+  .selection-rect {
+    position: absolute;
+    pointer-events: none;
+    display: none;
+    z-index: 20;
+    border: 1.5px solid rgba(96, 165, 250, 0.9);
+    background: rgba(96, 165, 250, 0.15);
+  }
+
+  .selection-rect.contain-mode {
+    border-style: solid;
+    border-color: rgba(74, 222, 128, 0.9);
+    background: rgba(74, 222, 128, 0.15);
+  }
+
   .defender {
     position: absolute;
     /* Same fixed-reference sizing as .player, see comment there. */
@@ -326,6 +350,9 @@
 
     <!-- draggable disc; snaps to the top-right of the nearest offensive player on release -->
     <div class="disc" id="disc" style="left:50%; top:55%;"></div>
+
+    <!-- right-click-drag marquee selection overlay -->
+    <div class="selection-rect" id="selectionRect"></div>
   </div>
   </div>
 
@@ -805,10 +832,12 @@
 
   // --- generic drag wiring, parameterized per element type ---
 
-  function makeDraggable(el, { onStart, onMove, onEnd } = {}) {
+  function makeDraggable(el, { onStart, onMove, onEnd, canStart } = {}) {
     let dragging = false;
 
     el.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return; // left button only -- right button drives marquee selection instead
+      if (canStart && !canStart(e)) return;
       dragging = true;
       el.classList.add('dragging');
       el.setPointerCapture(e.pointerId);
@@ -834,9 +863,75 @@
     el.addEventListener('pointercancel', stop);
   }
 
+  // --- multi-select: right-click-drag marquee, shift+click, ESC, and dragging a
+  // selected player carries the rest of the selection along with it.
+
+  const selectedPlayers = new Set();
+  let lastGroupDragLeft = null;
+  let lastGroupDragTop = null;
+
+  function updateSelectionVisuals() {
+    players.forEach(p => p.classList.toggle('selected', selectedPlayers.has(p)));
+  }
+
+  function clearSelection() {
+    if (selectedPlayers.size === 0) return;
+    selectedPlayers.clear();
+    updateSelectionVisuals();
+  }
+
+  function toggleSelection(p) {
+    if (selectedPlayers.has(p)) {
+      selectedPlayers.delete(p);
+    } else {
+      selectedPlayers.add(p);
+    }
+    updateSelectionVisuals();
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') clearSelection();
+  });
+
+  function onPlayerDragStart(el) {
+    if (!selectedPlayers.has(el)) {
+      // Starting a fresh drag on a player outside the current selection replaces
+      // it, same as clicking an unselected item in a typical CAD/office app --
+      // otherwise this drag would ambiguously mix an old selection with a new one.
+      clearSelection();
+    }
+    lastGroupDragLeft = parseFloat(el.style.left) || 0;
+    lastGroupDragTop = parseFloat(el.style.top) || 0;
+  }
+
   function onPlayerMove(el) {
     resolveCollisions(el);
     resolvePlayerDefenderCollisions(el);
+
+    // Group drag: carry every other selected player along by the same delta this
+    // frame, so a multi-selection moves as a rigid unit. Collision physics above
+    // only ever reasons about the actively-dragged player, so the other members
+    // just ride along directly rather than independently colliding.
+    if (selectedPlayers.size > 1 && selectedPlayers.has(el)) {
+      const curLeft = parseFloat(el.style.left) || 0;
+      const curTop = parseFloat(el.style.top) || 0;
+      const dLeft = curLeft - lastGroupDragLeft;
+      const dTop = curTop - lastGroupDragTop;
+
+      if (dLeft !== 0 || dTop !== 0) {
+        selectedPlayers.forEach(other => {
+          if (other === el) return;
+          const oLeft = clampPercent((parseFloat(other.style.left) || 0) + dLeft);
+          const oTop = clampPercent((parseFloat(other.style.top) || 0) + dTop);
+          other.style.left = oLeft + '%';
+          other.style.top = oTop + '%';
+        });
+      }
+
+      lastGroupDragLeft = curLeft;
+      lastGroupDragTop = curTop;
+    }
+
     syncAttachments(); // carry along anything grouped to a player that just moved
     checkDefenderAttachments();
     updateDefenderFacings();
@@ -862,7 +957,17 @@
     updateDefenderFacings();
   }
 
-  players.forEach(p => makeDraggable(p, { onMove: onPlayerMove }));
+  players.forEach(p => makeDraggable(p, {
+    onStart: onPlayerDragStart,
+    onMove: onPlayerMove,
+    canStart: (e) => {
+      if (e.shiftKey) {
+        toggleSelection(p); // shift+click only toggles selection, never starts a drag
+        return false;
+      }
+      return true;
+    }
+  }));
   defenders.forEach(d => makeDraggable(d, { onStart: detach, onMove: onDefenderMove, onEnd: onDefenderEnd }));
 
   // --- disc: free-drag, then snaps to (and groups with) the nearest offensive player ---
@@ -1211,6 +1316,76 @@
   }
 
   document.getElementById('resetDefenseBtn').addEventListener('click', resetDefense);
+
+  // --- right-click-drag marquee selection ---
+  // Directional convention: dragging left-to-right selects every player the
+  // rectangle touches at all ("touch" mode); dragging right-to-left selects
+  // only players fully contained within the rectangle ("contain" mode). Shift
+  // held at drag-start adds to the existing selection instead of replacing it.
+
+  const selectionRectEl = document.getElementById('selectionRect');
+  let marqueeActive = false;
+  let marqueeStartX = 0;
+  let marqueeStartY = 0;
+  let marqueeAdditive = false;
+
+  wrap.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  function updateMarqueeRect(curX, curY) {
+    const wrapRect = wrap.getBoundingClientRect();
+    selectionRectEl.style.left = (Math.min(marqueeStartX, curX) - wrapRect.left) + 'px';
+    selectionRectEl.style.top = (Math.min(marqueeStartY, curY) - wrapRect.top) + 'px';
+    selectionRectEl.style.width = Math.abs(curX - marqueeStartX) + 'px';
+    selectionRectEl.style.height = Math.abs(curY - marqueeStartY) + 'px';
+    selectionRectEl.classList.toggle('contain-mode', curX < marqueeStartX);
+  }
+
+  wrap.addEventListener('pointerdown', (e) => {
+    if (e.button !== 2) return;
+    marqueeActive = true;
+    marqueeAdditive = e.shiftKey;
+    marqueeStartX = e.clientX;
+    marqueeStartY = e.clientY;
+    selectionRectEl.style.display = 'block';
+    updateMarqueeRect(e.clientX, e.clientY);
+    e.preventDefault();
+  });
+
+  window.addEventListener('pointermove', (e) => {
+    if (!marqueeActive) return;
+    updateMarqueeRect(e.clientX, e.clientY);
+  });
+
+  window.addEventListener('pointerup', (e) => {
+    if (!marqueeActive) return;
+    marqueeActive = false;
+    selectionRectEl.style.display = 'none';
+    selectionRectEl.classList.remove('contain-mode');
+
+    const rectLeft = Math.min(marqueeStartX, e.clientX);
+    const rectRight = Math.max(marqueeStartX, e.clientX);
+    const rectTop = Math.min(marqueeStartY, e.clientY);
+    const rectBottom = Math.max(marqueeStartY, e.clientY);
+    const touchMode = e.clientX >= marqueeStartX; // left-to-right
+
+    if (!marqueeAdditive) clearSelection();
+
+    players.forEach(p => {
+      const c = getCenterPx(p); // page-px {x, y, radius}, same coordinate space as clientX/Y
+      let matches;
+      if (touchMode) {
+        const clampedX = Math.max(rectLeft, Math.min(rectRight, c.x));
+        const clampedY = Math.max(rectTop, Math.min(rectBottom, c.y));
+        matches = Math.hypot(c.x - clampedX, c.y - clampedY) <= c.radius;
+      } else {
+        matches = (c.x - c.radius >= rectLeft) && (c.x + c.radius <= rectRight) &&
+                  (c.y - c.radius >= rectTop) && (c.y + c.radius <= rectBottom);
+      }
+      if (matches) selectedPlayers.add(p);
+    });
+
+    updateSelectionVisuals();
+  });
 })();
 </script>
 
