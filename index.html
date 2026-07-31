@@ -911,6 +911,11 @@
   // case for markers.
   wrap.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
+    if (e.ctrlKey) {
+      moveSelectionTo(e.clientX, e.clientY);
+      e.preventDefault();
+      return;
+    }
     if (!e.target.closest('.player, .defender, .disc')) clearSelection();
   });
 
@@ -992,6 +997,12 @@
 
   function shiftToggleCanStart(el) {
     return (e) => {
+      if (e.ctrlKey) {
+        // ctrl+click moves the current selection to the click point instead of
+        // dragging this element -- let the pointerdown bubble up to the
+        // wrap-level handler that implements that.
+        return false;
+      }
       if (e.shiftKey) {
         toggleSelection(el); // shift+click only toggles selection, never starts a drag
         return false;
@@ -1000,11 +1011,71 @@
     };
   }
 
+  // Double-clicking a player selects just that player, plus whichever defender
+  // (if any) is currently snapped to it -- the natural target of the ctrl+click
+  // move-to-point gesture below.
+  function selectPlayerAndDefender(p) {
+    clearSelection();
+    selectedItems.add(p);
+    defenders.forEach(d => {
+      const info = attachments.get(d);
+      if (info && info.target === p) selectedItems.add(d);
+    });
+    updateSelectionVisuals();
+  }
+
+  // Ctrl+click moves every currently-selected player to the clicked point,
+  // translating the whole group by the same delta so their relative
+  // positioning is preserved. The player that lands exactly on the clicked
+  // point is whichever selected player is furthest south (largest top%),
+  // breaking ties by furthest east (largest left%). Any defender attached to a
+  // moved player rides along automatically via syncAttachments(), same as a
+  // normal group drag.
+  function moveSelectionTo(clientX, clientY) {
+    const selectedPlayers = players.filter(p => selectedItems.has(p));
+    if (selectedPlayers.length === 0) return;
+
+    const EPS = 1e-6;
+    let reference = selectedPlayers[0];
+    let refTop = parseFloat(reference.style.top) || 0;
+    let refLeft = parseFloat(reference.style.left) || 0;
+
+    for (let i = 1; i < selectedPlayers.length; i++) {
+      const p = selectedPlayers[i];
+      const pTop = parseFloat(p.style.top) || 0;
+      const pLeft = parseFloat(p.style.left) || 0;
+      const moreSouth = pTop > refTop + EPS;
+      const tiedButMoreEast = Math.abs(pTop - refTop) <= EPS && pLeft > refLeft;
+      if (moreSouth || tiedButMoreEast) {
+        reference = p;
+        refTop = pTop;
+        refLeft = pLeft;
+      }
+    }
+
+    const wrapRect = wrap.getBoundingClientRect();
+    const targetLeftPct = clampPercent(((clientX - wrapRect.left) / wrapRect.width) * 100);
+    const targetTopPct = clampPercent(((clientY - wrapRect.top) / wrapRect.height) * 100);
+    const dLeft = targetLeftPct - refLeft;
+    const dTop = targetTopPct - refTop;
+    if (dLeft === 0 && dTop === 0) return;
+
+    selectedPlayers.forEach(p => {
+      p.style.left = clampPercent((parseFloat(p.style.left) || 0) + dLeft) + '%';
+      p.style.top = clampPercent((parseFloat(p.style.top) || 0) + dTop) + '%';
+    });
+
+    syncAttachments();
+    checkDefenderAttachments();
+    updateDefenderFacings();
+  }
+
   players.forEach(p => makeDraggable(p, {
     onStart: onSelectableDragStart,
     onMove: onPlayerMove,
     canStart: shiftToggleCanStart(p)
   }));
+  players.forEach(p => p.addEventListener('dblclick', () => selectPlayerAndDefender(p)));
   defenders.forEach(d => makeDraggable(d, {
     onStart: (el) => { detach(el); onSelectableDragStart(el); },
     onMove: onDefenderMove,
@@ -1062,7 +1133,7 @@
     attach(d, target);
   }
 
-  makeDraggable(disc, { onStart: detach, onEnd: snapDiscToNearestOffense });
+  makeDraggable(disc, { onStart: detach, onEnd: snapDiscToNearestOffense, canStart: (e) => !e.ctrlKey });
   snapDiscToNearestOffense(); // attach to its starting nearest player on load
   defaultPositions.set(disc, { left: disc.style.left, top: disc.style.top }); // capture post-snap default
   const defaultDiscTarget = attachments.get(disc).target; // capture which player it's grouped with by default
