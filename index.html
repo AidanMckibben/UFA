@@ -265,7 +265,11 @@
     <div class="toolbar" id="markToggle">
       <button class="toggle-btn active" data-value="force-backhand">Force Backhand</button>
       <button class="toggle-btn" data-value="force-flick">Force Flick</button>
-      <button class="toggle-btn" data-value="strongside">Strongside</button>
+    </div>
+
+    <p class="subheader">Strongside</p>
+    <div class="toolbar">
+      <button class="toggle-btn" id="strongsideToggle">Strongside</button>
     </div>
 
     <p class="footer-note">
@@ -361,25 +365,28 @@
     document.documentElement.style.setProperty('--player-ref-height', (referenceWidth / FULL_FIELD_RATIO_WH) + 'px');
   }
 
-  // Endzone mode zooms the field to just the top half (the top endzone plus the
-  // near half of the playing field, i.e. y:0-350 of the full 700-unit field).
+  // Endzone mode zooms the field to just the top third (the top endzone plus the
+  // near third of the playing field, i.e. y:0-233.33 of the full 700-unit field).
   // The SVG viewBox is narrowed so the same 400-unit-wide content simply becomes
   // taller relative to what's shown, and field-wrap's aspect ratio is widened to
-  // match (40:35 instead of 40:70) so it isn't stretched or letterboxed. Since
-  // preserveAspectRatio="none" was already in place, everything below y=350 (the
-  // far endzone, its brick marks, its goal line) is simply outside the new
-  // viewBox and never rendered -- no need to separately hide those elements.
+  // match (40:23.33yd, i.e. a 12:7 ratio, instead of 40:70) so it isn't stretched
+  // or letterboxed. Since preserveAspectRatio="none" was already in place,
+  // everything below the new cutoff (the far endzone and midfield, plus two
+  // thirds of the playing field) is simply outside the new viewBox and never
+  // rendered -- no need to separately hide those elements.
   let endzoneMode = false;
+  const ENDZONE_VIEWBOX_HEIGHT = 700 / 3;
+  const ENDZONE_RATIO_WH = 12 / 7; // 40yd / (70/3)yd, reduced
 
   function setFieldMode(mode) {
     endzoneMode = mode === 'endzone';
     const svg = document.getElementById('field');
 
     if (endzoneMode) {
-      svg.setAttribute('viewBox', '0 0 400 350');
+      svg.setAttribute('viewBox', `0 0 400 ${ENDZONE_VIEWBOX_HEIGHT}`);
       wrap.classList.add('endzone-mode');
-      wrap.style.setProperty('--field-ratio-wh', 40 / 35);
-      wrap.style.setProperty('--field-ar', '40 / 35');
+      wrap.style.setProperty('--field-ratio-wh', ENDZONE_RATIO_WH);
+      wrap.style.setProperty('--field-ar', `${ENDZONE_RATIO_WH}`);
     } else {
       svg.setAttribute('viewBox', '0 0 400 700');
       wrap.classList.remove('endzone-mode');
@@ -976,11 +983,11 @@
 
   // A given percentage offset is only a fixed real-world angle if it's scaled by
   // the field's actual yardage in each direction -- the field is always 40yd
-  // wide, but its visible height is 70yd in the full view and 35yd in Endzone
-  // mode, so "yards behind" needs to know which is currently active.
+  // wide, but its visible height is 70yd in the full view and 70/3yd (a third)
+  // in Endzone mode, so "yards behind" needs to know which is currently active.
   const FIELD_WIDTH_YD = 40;
   const FULL_FIELD_HEIGHT_YD = 70;
-  const ENDZONE_FIELD_HEIGHT_YD = 35;
+  const ENDZONE_FIELD_HEIGHT_YD = 70 / 3;
   const RESET_OFFSET_YD = 5; // yards behind and yards to the open side (equal, for 45deg)
 
   function currentFieldHeightYd() {
@@ -1083,6 +1090,15 @@
   wireToggleGroup('downfieldToggle');
   wireToggleGroup('markToggle');
 
+  // Strongside is independent of Mark, not a third option within it: it only
+  // ever changes the SIDE of the downfield (non-mark) defenders. The mark
+  // defender's side always comes from Force Backhand/Flick regardless of
+  // whether Strongside is also on, so the mark keeps denying the correct throw
+  // no matter what the rest of the defense is doing.
+  document.getElementById('strongsideToggle').addEventListener('click', function () {
+    this.classList.toggle('active');
+  });
+
   function getDiscHolderPlayer() {
     const info = attachments.get(disc);
     return info ? info.target : null;
@@ -1097,11 +1113,12 @@
 
   function resetDefense() {
     const downfield = getActiveToggleValue('downfieldToggle'); // 'fronting' | 'backing'
-    const mark = getActiveToggleValue('markToggle'); // 'force-backhand' | 'force-flick' | 'strongside'
+    const mark = getActiveToggleValue('markToggle'); // 'force-backhand' | 'force-flick'
+    const strongsideOn = document.getElementById('strongsideToggle').classList.contains('active');
 
     const mainVertical = downfield === 'fronting' ? 'bottom' : 'top';
-    const mainSide = mark === 'force-backhand' ? 'left' : 'right'; // unused when mark is strongside
-    const markOppositeSide = mark === 'force-backhand' ? 'right' : 'left'; // unused when mark is strongside
+    const mainSide = mark === 'force-backhand' ? 'left' : 'right';
+    const markOppositeSide = mark === 'force-backhand' ? 'right' : 'left';
 
     const discHolder = getDiscHolderPlayer();
     const discLeftPct = parseFloat(disc.style.left) || 0;
@@ -1113,8 +1130,9 @@
       const playerTopPct = parseFloat(p.style.top) || 0;
 
       if (p === discHolder) {
-        const side = mark === 'strongside' ? sideTowardDisc(playerLeftPct, discLeftPct) : markOppositeSide;
-        snapDefenderToPlayer(d, p, ORIENTATION_ANGLES[`top-${side}`]);
+        // Always the Force Backhand/Flick opposite side -- unaffected by
+        // Strongside, which only touches the downfield defenders below.
+        snapDefenderToPlayer(d, p, ORIENTATION_ANGLES[`top-${markOppositeSide}`]);
         return;
       }
 
@@ -1126,7 +1144,7 @@
         side = sideTowardDisc(playerLeftPct, discLeftPct);
       } else {
         vertical = mainVertical;
-        side = mark === 'strongside' ? sideTowardDisc(playerLeftPct, discLeftPct) : mainSide;
+        side = strongsideOn ? sideTowardDisc(playerLeftPct, discLeftPct) : mainSide;
       }
 
       snapDefenderToPlayer(d, p, ORIENTATION_ANGLES[`${vertical}-${side}`]);
