@@ -120,6 +120,13 @@
     border-color: #475569;
   }
 
+  button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+    background: #1f2937;
+    border-color: #334155;
+  }
+
   button:active {
     transform: translateY(1px);
   }
@@ -129,7 +136,7 @@
     /* --field-ratio-wh is width/height as a plain number (40/110 in the full
        field, with the Endzone crop handled in JS so the width formula always
        matches the visible shape). */
-    width: min(var(--field-budget-w, 94vw), calc(var(--field-budget-h, 88vh) * var(--field-ratio-wh, 0.363636)));
+    width: calc(min(var(--field-budget-w, 94vw), calc(var(--field-budget-h, 88vh) * var(--field-ratio-wh, 0.363636))) * var(--field-zoom, 1));
     aspect-ratio: var(--field-ar, 40 / 110);
     border-radius: 6px;
     box-shadow: 0 10px 40px rgba(0,0,0,0.45);
@@ -153,7 +160,7 @@
        the CURRENT field-wrap width, so switching to Endzone mode (which widens
        the field's visible shape) doesn't scale markers up along with it. */
     width: calc(var(--player-ref-width, 460px) * 0.04875);
-    aspect-ratio: 1 / 1;
+    height: calc(var(--player-ref-width, 460px) * 0.04875);
     border-radius: 50%;
     background: radial-gradient(circle at 35% 30%, var(--player-blue-dark), #1e3a8a 70%);
     border: 2px solid #93c5fd;
@@ -276,6 +283,13 @@
       <button id="clearBtn">Clear to Bench</button>
     </div>
 
+    <p class="subheader">Zoom</p>
+    <div class="toolbar">
+      <button id="zoomOutBtn">Zoom Out</button>
+      <button id="zoomResetBtn">Reset Zoom</button>
+      <button id="zoomInBtn">Zoom In</button>
+    </div>
+
     <p class="section-header">Set-up</p>
     <div class="toolbar">
       <button id="horizontalBtn">Horizontal</button>
@@ -377,6 +391,16 @@
   const players = Array.from(document.querySelectorAll('.player'));
   const defenders = Array.from(document.querySelectorAll('.defender'));
   const disc = document.getElementById('disc');
+  const zoomButtons = {
+    out: document.getElementById('zoomOutBtn'),
+    reset: document.getElementById('zoomResetBtn'),
+    in: document.getElementById('zoomInBtn')
+  };
+
+  let fieldZoom = 1;
+  const MIN_FIELD_ZOOM = 1;
+  const MAX_FIELD_ZOOM = 2.5;
+  const FIELD_ZOOM_STEP = 0.15;
 
   // The field's size is capped by two independently-measured pixel budgets rather
   // than fixed vw/vh guesses: the sidebar (title, buttons, footer note) sits beside
@@ -394,18 +418,36 @@
 
     const availableH = window.innerHeight - topPad - bottomPad - SAFETY_BUFFER;
     const availableW = fieldOuter.getBoundingClientRect().width - SAFETY_BUFFER;
+    const effectiveZoom = endzoneMode ? 1 : fieldZoom;
 
     document.documentElement.style.setProperty('--field-budget-h', Math.max(200, availableH) + 'px');
     document.documentElement.style.setProperty('--field-budget-w', Math.max(200, availableW) + 'px');
+    document.documentElement.style.setProperty('--field-zoom', effectiveZoom);
 
-    // Marker (player/defender/disc) size is pinned to what the field's width
-    // would be in the normal full 40x110 view, regardless of which mode is
-    // actually active, so Endzone mode's crop doesn't scale markers up along
-    // with it -- only the field itself zooms, not the pieces on it.
+    // Marker (player/defender/disc) size is pinned to the full-field reference
+    // width, then multiplied by the user zoom only when the full-field layout is
+    // active. Endzone crop ignores that zoom so it stays a field-only zoom.
     const FULL_FIELD_RATIO_WH = 40 / 110;
-    const referenceWidth = Math.min(Math.max(200, availableW), Math.max(200, availableH) * FULL_FIELD_RATIO_WH);
+    const baseReferenceWidth = Math.min(Math.max(200, availableW), Math.max(200, availableH) * FULL_FIELD_RATIO_WH);
+    const referenceWidth = baseReferenceWidth * effectiveZoom;
     document.documentElement.style.setProperty('--player-ref-width', referenceWidth + 'px');
     document.documentElement.style.setProperty('--player-ref-height', (referenceWidth / FULL_FIELD_RATIO_WH) + 'px');
+  }
+
+  function updateZoomButtons() {
+    const zoomedOut = fieldZoom <= MIN_FIELD_ZOOM + 1e-6;
+    const zoomedIn = fieldZoom >= MAX_FIELD_ZOOM - 1e-6;
+    zoomButtons.out.disabled = endzoneMode || zoomedOut;
+    zoomButtons.reset.disabled = endzoneMode || zoomedOut;
+    zoomButtons.in.disabled = endzoneMode || zoomedIn;
+  }
+
+  function setFieldZoom(nextZoom) {
+    const clampedZoom = Math.min(MAX_FIELD_ZOOM, Math.max(MIN_FIELD_ZOOM, nextZoom));
+    if (clampedZoom === fieldZoom) return;
+    fieldZoom = clampedZoom;
+    sizeFieldToViewport();
+    updateZoomButtons();
   }
 
   // Endzone mode crops the field to the top third for a tighter zoomed view while
@@ -441,9 +483,11 @@
     }
 
     sizeFieldToViewport();
+    updateZoomButtons();
   }
 
   sizeFieldToViewport();
+  updateZoomButtons();
   window.addEventListener('resize', sizeFieldToViewport);
 
   const defaultPositions = new Map();
@@ -1235,12 +1279,21 @@
 
   const DISC_GAP = 3; // px clearance between the disc's edge and the player's edge
   const TOP_RIGHT_ANGLE = -Math.PI / 4; // +x, -y (screen y grows downward)
+  const TOP_LEFT_ANGLE = -3 * Math.PI / 4;
 
-  function snapDiscToPlayer(target) {
+  function getDiscSnapAngle(force = getActiveToggleValue('markToggle')) {
+    return force === 'force-backhand' ? TOP_LEFT_ANGLE : TOP_RIGHT_ANGLE;
+  }
+
+  function getDiscDefenderSnapAngle(force = getActiveToggleValue('markToggle')) {
+    return force === 'force-backhand' ? ORIENTATION_ANGLES['top-right'] : ORIENTATION_ANGLES['top-left'];
+  }
+
+  function snapDiscToPlayer(target, angle = getDiscSnapAngle()) {
     const discCenter = getCenterPx(disc);
     const tc = getCenterPx(target);
     const offsetDist = tc.radius + discCenter.radius + DISC_GAP;
-    setCenterPx(disc, tc.x + Math.cos(TOP_RIGHT_ANGLE) * offsetDist, tc.y + Math.sin(TOP_RIGHT_ANGLE) * offsetDist);
+    setCenterPx(disc, tc.x + Math.cos(angle) * offsetDist, tc.y + Math.sin(angle) * offsetDist);
     attach(disc, target); // group with it: it'll be carried along whenever that player moves
   }
 
@@ -1296,6 +1349,7 @@
       el.style.top = pos.top;
     });
     attach(disc, defaultDiscTarget); // restore the disc's original grouping too
+    syncDiscToForce();
     checkDefenderAttachments();
     updateDefenderFacings();
   });
@@ -1317,6 +1371,10 @@
     disc.style.top = '95%';
     updateDefenderFacings();
   });
+
+  zoomButtons.out.addEventListener('click', () => setFieldZoom(fieldZoom - FIELD_ZOOM_STEP));
+  zoomButtons.reset.addEventListener('click', () => setFieldZoom(1));
+  zoomButtons.in.addEventListener('click', () => setFieldZoom(fieldZoom + FIELD_ZOOM_STEP));
 
   // --- Set-up: formation presets. Each positions all 7 offensive players, assigns
   // one defender per player (1:1 by array order, currently always placed top-right
@@ -1474,26 +1532,19 @@
     currentEndzoneFormation = 'sideline';
   });
 
-  // --- Defense: Reset Defense snaps every defender to its matching offensive
-  // player (1:1 by array order, same convention as the Set-up formations), at one
-  // of the four diagonal corners around that player. Which corner depends on two
+  // --- Defense: Reset Defense only repositions defenders that are already
+  // snapped to an offensive player. Unattached defenders are left exactly where
+  // they are. Which snapped defender position is chosen depends on two
   // independent, mutually-exclusive toggle groups:
-  //   Downfield: Fronting -> bottom corner, Backing -> top corner
+  //   Downfield: Fronting -> defender goes between its player and the disc,
+  //   Backing -> the exact opposite side of the player
   //   Mark: Force Backhand -> left corner, Force Flick -> right corner,
   //         Strongside -> whichever side the disc is currently on (per-defender,
   //         based on that defender's own offensive player, overriding the fixed
   //         left/right that Force Backhand/Flick would otherwise give)
   // The defender marking whoever currently holds the disc is a special case: it
-  // always takes the TOP corner regardless of Downfield, and (for Force Backhand/
-  // Flick) takes the opposite side from every other defender. Under Strongside
-  // there's no fixed "opposite" side to take, so the mark defender falls back to
-  // the same toward-the-disc rule as everyone else.
-  //
-  // On top of all of that, ANY downfield defender whose own offensive player is
-  // at or behind the disc's level, or only up to 5% ahead of it, always takes the
-  // TOP corner too (regardless of Downfield/Fronting-Backing), with the side
-  // picked toward the disc -- a defender that close to the disc doesn't make
-  // sense fronting from below, so this overrides Downfield but not Mark.
+  // stays where it is so the disc-side defender does not get repositioned by the
+  // fronting/backing reset.
 
   const ORIENTATION_ANGLES = {
     'top-right': -Math.PI / 4,
@@ -1502,12 +1553,15 @@
     'bottom-left': 3 * Math.PI / 4
   };
 
-  function wireToggleGroup(containerId) {
+  const DEFENCE_SETUP_STYLE = "fixed"; // "fixed" or "dynamic"
+
+  function wireToggleGroup(containerId, onChange) {
     const container = document.getElementById(containerId);
     container.querySelectorAll('.toggle-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         container.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
+        if (onChange) onChange(btn.dataset.value);
       });
     });
   }
@@ -1516,8 +1570,18 @@
     return document.querySelector(`#${containerId} .toggle-btn.active`).dataset.value;
   }
 
-  wireToggleGroup('downfieldToggle');
-  wireToggleGroup('markToggle');
+  function syncDiscToForce() {
+    const info = attachments.get(disc);
+    if (info && info.target) {
+      snapDiscToPlayer(info.target, getDiscSnapAngle());
+    }
+  }
+
+  wireToggleGroup('downfieldToggle', resetDefense);
+  wireToggleGroup('markToggle', () => {
+    syncDiscToForce();
+    resetDefense();
+  });
 
   // Strongside is independent of Mark, not a third option within it: it only
   // ever changes the SIDE of the downfield (non-mark) defenders. The mark
@@ -1545,38 +1609,38 @@
     const mark = getActiveToggleValue('markToggle'); // 'force-backhand' | 'force-flick'
     const strongsideOn = document.getElementById('strongsideToggle').classList.contains('active');
 
-    const mainVertical = downfield === 'fronting' ? 'bottom' : 'top';
-    const mainSide = mark === 'force-backhand' ? 'left' : 'right';
-    const markOppositeSide = mark === 'force-backhand' ? 'right' : 'left';
-
     const discHolder = getDiscHolderPlayer();
-    const discLeftPct = parseFloat(disc.style.left) || 0;
-    const discTopPct = parseFloat(disc.style.top) || 0;
 
-    players.forEach((p, i) => {
-      const d = defenders[i];
-      const playerLeftPct = parseFloat(p.style.left) || 0;
-      const playerTopPct = parseFloat(p.style.top) || 0;
+    defenders.forEach(d => {
+      const info = attachments.get(d);
+      if (!info) return; // never move defenders that are not already snapped to a player
 
-      if (p === discHolder) {
-        // Always the Force Backhand/Flick opposite side -- unaffected by
-        // Strongside, which only touches the downfield defenders below.
-        snapDefenderToPlayer(d, p, ORIENTATION_ANGLES[`top-${markOppositeSide}`]);
+      const target = info.target;
+      if (target === discHolder) {
+        snapDefenderToPlayer(d, target, getDiscDefenderSnapAngle(mark));
         return;
       }
-
-      const nearOrBehindDisc = (discTopPct - playerTopPct) <= NEAR_BEHIND_DISC_MARGIN_PCT;
-      let vertical, side;
-
-      if (nearOrBehindDisc) {
-        vertical = 'top';
-        side = sideTowardDisc(playerLeftPct, discLeftPct);
+      
+      if (DEFENCE_SETUP_STYLE == "fixed") {
+        // Fixed left/right corner for the mark defender, regardless of disc position
+        if (mark === 'force-backhand' && downfield === 'backing') {
+          snapDefenderToPlayer(d, target, ORIENTATION_ANGLES['top-left']);
+        } else if (mark === 'force-backhand' && downfield === 'fronting') {
+          snapDefenderToPlayer(d, target, ORIENTATION_ANGLES['bottom-left']);
+        } else if (mark === 'force-flick' && downfield === 'backing') {
+          snapDefenderToPlayer(d, target, ORIENTATION_ANGLES['top-right']);
+        } else if (mark === 'force-flick' && downfield === 'fronting') {
+          snapDefenderToPlayer(d, target, ORIENTATION_ANGLES['bottom-right']);
+        }
+        return;
       } else {
-        vertical = mainVertical;
-        side = strongsideOn ? sideTowardDisc(playerLeftPct, discLeftPct) : mainSide;
-      }
+        const targetCenter = getCenterPx(target);
+        const discCenter = getCenterPx(disc);
+        const frontAngle = Math.atan2(discCenter.y - targetCenter.y, discCenter.x - targetCenter.x);
+        const angle = downfield === 'fronting' ? frontAngle : frontAngle + Math.PI;
 
-      snapDefenderToPlayer(d, p, ORIENTATION_ANGLES[`${vertical}-${side}`]);
+        snapDefenderToPlayer(d, target, angle);
+      }
     });
 
     updateDefenderFacings();
