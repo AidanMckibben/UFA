@@ -126,11 +126,11 @@
 
   .field-wrap {
     position: relative;
-    /* --field-ratio-wh is width/height as a plain number (40/70 normally, 40/35
-       when zoomed to just the top half), kept in sync with the aspect-ratio below
-       by setFieldMode() so the width formula always matches the visible shape. */
-    width: min(var(--field-budget-w, 94vw), calc(var(--field-budget-h, 88vh) * var(--field-ratio-wh, 0.571429)));
-    aspect-ratio: var(--field-ar, 40 / 70);
+    /* --field-ratio-wh is width/height as a plain number (40/110 in the full
+       field, with the Endzone crop handled in JS so the width formula always
+       matches the visible shape). */
+    width: min(var(--field-budget-w, 94vw), calc(var(--field-budget-h, 88vh) * var(--field-ratio-wh, 0.363636)));
+    aspect-ratio: var(--field-ar, 40 / 110);
     border-radius: 6px;
     box-shadow: 0 10px 40px rgba(0,0,0,0.45);
     overflow: hidden;
@@ -321,29 +321,28 @@
 
   <div class="field-outer" id="fieldOuter">
   <div class="field-wrap" id="fieldWrap">
-    <svg id="field" viewBox="0 0 400 700" preserveAspectRatio="none">
-      <!-- field background -->
-      <rect x="0" y="0" width="400" height="700" fill="#2d7a3e"/>
+    <svg id="field" viewBox="0 0 400 1100" preserveAspectRatio="none">
+      <!-- full field: 40 yards wide x 110 yards long, with 20-yard end zones on each side -->
+      <rect x="0" y="0" width="400" height="1100" fill="#2d7a3e"/>
 
-      <!-- end zones (each end zone is 20 yards of the 70; playing field is 40x40 wide, but per spec field is 70 tall x 40 wide total incl endzones) -->
-      <rect x="0" y="0" width="400" height="100" fill="#1f5c2c"/>
-      <rect x="0" y="600" width="400" height="100" fill="#1f5c2c"/>
+      <rect x="0" y="0" width="400" height="200" fill="#1f5c2c"/>
+      <rect x="0" y="900" width="400" height="200" fill="#1f5c2c"/>
 
       <!-- brick marks (approx) -->
-      <line x1="190" y1="180" x2="210" y2="180" stroke="#ffffff" stroke-width="2" opacity="0.7"/>
-      <line x1="200" y1="170" x2="200" y2="190" stroke="#ffffff" stroke-width="2" opacity="0.7"/>
-      <line x1="190" y1="520" x2="210" y2="520" stroke="#ffffff" stroke-width="2" opacity="0.7"/>
-      <line x1="200" y1="510" x2="200" y2="530" stroke="#ffffff" stroke-width="2" opacity="0.7"/>
+      <line x1="190" y1="260" x2="210" y2="260" stroke="#ffffff" stroke-width="2" opacity="0.7"/>
+      <line x1="200" y1="250" x2="200" y2="270" stroke="#ffffff" stroke-width="2" opacity="0.7"/>
+      <line x1="190" y1="840" x2="210" y2="840" stroke="#ffffff" stroke-width="2" opacity="0.7"/>
+      <line x1="200" y1="830" x2="200" y2="850" stroke="#ffffff" stroke-width="2" opacity="0.7"/>
 
       <!-- boundary lines -->
-      <rect x="2" y="2" width="396" height="696" fill="none" stroke="#ffffff" stroke-width="3"/>
+      <rect x="2" y="2" width="396" height="1096" fill="none" stroke="#ffffff" stroke-width="3"/>
 
       <!-- goal lines (end zone boundary) -->
-      <line x1="0" y1="100" x2="400" y2="100" stroke="#ffffff" stroke-width="3"/>
-      <line x1="0" y1="600" x2="400" y2="600" stroke="#ffffff" stroke-width="3"/>
+      <line x1="0" y1="200" x2="400" y2="200" stroke="#ffffff" stroke-width="3"/>
+      <line x1="0" y1="900" x2="400" y2="900" stroke="#ffffff" stroke-width="3"/>
 
       <!-- midfield line -->
-      <line x1="0" y1="350" x2="400" y2="350" stroke="#ffffff" stroke-width="1.5" stroke-dasharray="8 6" opacity="0.6"/>
+      <line x1="0" y1="550" x2="400" y2="550" stroke="#ffffff" stroke-width="1.5" stroke-dasharray="8 6" opacity="0.6"/>
     </svg>
 
     <!-- 7 draggable offensive players -->
@@ -400,24 +399,17 @@
     document.documentElement.style.setProperty('--field-budget-w', Math.max(200, availableW) + 'px');
 
     // Marker (player/defender/disc) size is pinned to what the field's width
-    // would be in the normal full (40:70) view, regardless of which mode is
-    // actually active, so Endzone mode's wider shape doesn't scale markers up
-    // along with it -- only the field itself zooms, not the pieces on it.
-    const FULL_FIELD_RATIO_WH = 40 / 70;
+    // would be in the normal full 40x110 view, regardless of which mode is
+    // actually active, so Endzone mode's crop doesn't scale markers up along
+    // with it -- only the field itself zooms, not the pieces on it.
+    const FULL_FIELD_RATIO_WH = 40 / 110;
     const referenceWidth = Math.min(Math.max(200, availableW), Math.max(200, availableH) * FULL_FIELD_RATIO_WH);
     document.documentElement.style.setProperty('--player-ref-width', referenceWidth + 'px');
     document.documentElement.style.setProperty('--player-ref-height', (referenceWidth / FULL_FIELD_RATIO_WH) + 'px');
   }
 
-  // Endzone mode zooms the field to just the top third (the top endzone plus the
-  // near third of the playing field, i.e. y:0-233.33 of the full 700-unit field).
-  // The SVG viewBox is narrowed so the same 400-unit-wide content simply becomes
-  // taller relative to what's shown, and field-wrap's aspect ratio is widened to
-  // match (40:23.33yd, i.e. a 12:7 ratio, instead of 40:70) so it isn't stretched
-  // or letterboxed. Since preserveAspectRatio="none" was already in place,
-  // everything below the new cutoff (the far endzone and midfield, plus two
-  // thirds of the playing field) is simply outside the new viewBox and never
-  // rendered -- no need to separately hide those elements.
+  // Endzone mode crops the field to the top third for a tighter zoomed view while
+  // preserving the true 40x110 geometry of the full field.
   let endzoneMode = false;
   // Tracks which zoomed-in layout is currently showing ('vertical' for Endzone
   // Middle, 'sideline' for Endzone Sideline, null when not zoomed at all). This
@@ -428,8 +420,8 @@
   // was why switching from Sideline to Endzone Middle used to bounce out to the
   // full-size field instead of switching formations while staying zoomed.
   let currentEndzoneFormation = null;
-  const ENDZONE_VIEWBOX_HEIGHT = 700 / 3;
-  const ENDZONE_RATIO_WH = 12 / 7; // 40yd / (70/3)yd, reduced
+  const ENDZONE_VIEWBOX_HEIGHT = 1100 / 3;
+  const ENDZONE_RATIO_WH = 40 / (110 / 3); // 40yd / (110/3)yd, reduced
 
   function setFieldMode(mode) {
     endzoneMode = mode === 'endzone';
@@ -441,7 +433,7 @@
       wrap.style.setProperty('--field-ratio-wh', ENDZONE_RATIO_WH);
       wrap.style.setProperty('--field-ar', `${ENDZONE_RATIO_WH}`);
     } else {
-      svg.setAttribute('viewBox', '0 0 400 700');
+      svg.setAttribute('viewBox', '0 0 400 1100');
       wrap.classList.remove('endzone-mode');
       wrap.style.removeProperty('--field-ratio-wh');
       wrap.style.removeProperty('--field-ar');
@@ -1348,7 +1340,7 @@
       // positions[1] here is just a fallback; resetIndex tells applyFormation to
       // recompute it via openSideResetPosition() instead, since a true 45deg angle
       // depends on the field's real yardage scale, which is different in Endzone
-      // mode (a 23.33yd-tall view, the top third) than in the full 70yd field --
+      // mode (a 36.67yd-tall view, the top third) than in the full 110yd field --
       // a fixed percentage can only be exactly 45deg in one of the two.
       resetIndex: 1,
       positions: [
@@ -1366,13 +1358,13 @@
     // in-line with them at field center, and the remaining 5 stacked along a
     // single straight line through the disc holder at 60deg from the x-axis,
     // leaning toward the far (left) sideline as it goes upfield (toward smaller
-    // top%). Computed in real yards (40yd wide x 23.33yd tall, the Endzone top
+    // top%). Computed in real yards (40yd wide x 36.67yd tall, the Endzone top
     // third) so the 60deg angle and spacing are geometrically exact rather than
     // just visually close, then converted to percentages here as fixed values
     // (this formation is only ever applied in Endzone mode, so the scale is
     // always the same).
     sideline: (() => {
-      const FIELD_W = 40, FIELD_H = 70 / 3;
+      const FIELD_W = 40, FIELD_H = 110 / 3;
       const holderXYd = 36, holderYYd = 20; // 90%, ~85.71% -- pushed deeper to leave
                                              // room for the larger gap below without
                                              // the far end of the stack running off
@@ -1401,11 +1393,12 @@
 
   // A given percentage offset is only a fixed real-world angle if it's scaled by
   // the field's actual yardage in each direction -- the field is always 40yd
-  // wide, but its visible height is 70yd in the full view and 70/3yd (a third)
-  // in Endzone mode, so "yards behind" needs to know which is currently active.
+  // wide, and the full-field visible height is 110yd with 20yd end zones on each
+  // side. Endzone mode crops the top third of that full height, so "yards behind"
+  // needs to know which is currently active.
   const FIELD_WIDTH_YD = 40;
-  const FULL_FIELD_HEIGHT_YD = 70;
-  const ENDZONE_FIELD_HEIGHT_YD = 70 / 3;
+  const FULL_FIELD_HEIGHT_YD = 110;
+  const ENDZONE_FIELD_HEIGHT_YD = 110 / 3;
   const RESET_OFFSET_YD = 5; // yards behind and yards to the open side (equal, for 45deg)
 
   function currentFieldHeightYd() {
@@ -1679,8 +1672,8 @@
   // --- arrow keys move the disc ---
   // Up to 2 arrow keys held at once gives 8-directional movement (4 cardinal +
   // 4 diagonal). Movement is computed in real yards per second and converted to
-  // percentages using the field's CURRENT yardage scale (40yd wide, 70yd or
-  // 70/3yd tall depending on Endzone mode) so it's a true, undistorted 8-way
+  // percentages using the field's CURRENT yardage scale (40yd wide, 110yd or
+  // 110/3yd tall depending on Endzone mode) so it's a true, undistorted 8-way
   // compass regardless of the field's on-screen aspect ratio, and diagonal
   // speed is normalized to match the cardinal directions rather than running
   // sqrt(2) times faster. Holding a key detaches the disc (same as picking it
