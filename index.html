@@ -144,6 +144,14 @@
     touch-action: none;
     user-select: none;
     flex-shrink: 0;
+    /* Lets zoomed-in views be panned up/down the field instead of always sitting
+       centered -- see setFieldPanY() in JS, which keeps this clamped so the
+       field-wrap never pans past its own edge and leaves a gap. */
+    transform: translateY(var(--field-pan-y, 0px));
+  }
+
+  .field-wrap.pannable {
+    cursor: ns-resize;
   }
 
   svg#field {
@@ -388,6 +396,7 @@
 <script>
 (function () {
   const wrap = document.getElementById('fieldWrap');
+  const fieldOuter = document.getElementById('fieldOuter');
   const players = Array.from(document.querySelectorAll('.player'));
   const defenders = Array.from(document.querySelectorAll('.defender'));
   const disc = document.getElementById('disc');
@@ -432,6 +441,11 @@
     const referenceWidth = baseReferenceWidth * effectiveZoom;
     document.documentElement.style.setProperty('--player-ref-width', referenceWidth + 'px');
     document.documentElement.style.setProperty('--player-ref-height', (referenceWidth / FULL_FIELD_RATIO_WH) + 'px');
+
+    // Field size/zoom just changed, which changes how far the view can be panned
+    // (see setFieldPanY below) -- re-clamp against the new bounds so a pan that
+    // was valid at the old zoom/viewport doesn't leave a gap at the new one.
+    setFieldPanY(fieldPanY);
   }
 
   function updateZoomButtons() {
@@ -485,6 +499,40 @@
     sizeFieldToViewport();
     updateZoomButtons();
   }
+
+  // Zooming in (fieldZoom > 1) grows the field-wrap past the field-outer's
+  // bounds, and since field-outer just centers it and clips the overflow, a
+  // zoomed-in view otherwise always shows the exact same centered crop no
+  // matter how far you zoom. fieldPanY lets that crop be shifted up/down (via
+  // mouse wheel) to reveal the rest of the field -- e.g. scrolling to the far
+  // endzone while zoomed in on the other end. Clamped so the field-wrap can
+  // never pan far enough to expose empty space at its own top/bottom edge.
+  let fieldPanY = 0; // px; translateY applied to .field-wrap, 0 = centered
+
+  function getMaxFieldPanY() {
+    if (endzoneMode || fieldZoom <= MIN_FIELD_ZOOM + 1e-6) return 0;
+    const outerH = fieldOuter.getBoundingClientRect().height;
+    const wrapH = wrap.getBoundingClientRect().height;
+    return Math.max(0, (wrapH - outerH) / 2);
+  }
+
+  function setFieldPanY(nextPanY) {
+    const maxPanY = getMaxFieldPanY();
+    fieldPanY = Math.min(maxPanY, Math.max(-maxPanY, nextPanY));
+    document.documentElement.style.setProperty('--field-pan-y', fieldPanY + 'px');
+    wrap.classList.toggle('pannable', maxPanY > 0);
+  }
+
+  // Wheel-to-pan: scrolling down moves the view further down the field (toward
+  // whichever end is currently cropped off at the bottom), scrolling up moves it
+  // back toward the top -- same convention as scrolling a page. Only hijacks the
+  // wheel event when there's actually somewhere to pan to, so scrolling over an
+  // un-zoomed field does nothing unexpected.
+  wrap.addEventListener('wheel', (e) => {
+    if (getMaxFieldPanY() <= 0) return;
+    e.preventDefault();
+    setFieldPanY(fieldPanY - e.deltaY);
+  }, { passive: false });
 
   sizeFieldToViewport();
   updateZoomButtons();
@@ -1281,6 +1329,16 @@
   const TOP_RIGHT_ANGLE = -Math.PI / 4; // +x, -y (screen y grows downward)
   const TOP_LEFT_ANGLE = -3 * Math.PI / 4;
 
+  // Defined here (rather than down near Reset Defense, where it's also used) so
+  // it's already initialized the first time snapDiscToPlayer runs -- including
+  // the very first, page-load call to snapDiscToNearestOffense() below.
+  const ORIENTATION_ANGLES = {
+    'top-right': -Math.PI / 4,
+    'top-left': -3 * Math.PI / 4,
+    'bottom-right': Math.PI / 4,
+    'bottom-left': 3 * Math.PI / 4
+  };
+
   function getDiscSnapAngle(force = getActiveToggleValue('markToggle')) {
     return force === 'force-backhand' ? TOP_LEFT_ANGLE : TOP_RIGHT_ANGLE;
   }
@@ -1289,12 +1347,68 @@
     return force === 'force-backhand' ? ORIENTATION_ANGLES['top-right'] : ORIENTATION_ANGLES['top-left'];
   }
 
+  // Whichever defender is currently guarding the disc holder should always be
+  // marking from the correct force side (top-left for Force Backhand, top-right
+  // for Force Flick) -- not just after a manual Reset Defense click. This keeps
+  // the mark in the right spot the instant a new player gets the disc, whether
+  // that's from dragging the disc onto them, a formation snapping them in as the
+  // center handler, or Reset/Clear restoring the default holder.
+  //
+  // The flip side: whoever was marking the PREVIOUS holder is no longer marking
+  // the disc once possession moves on, so that defender shouldn't stay parked in
+  // the mark spot -- it should fall back to the normal off-disc defender position
+  // (the same Fronting/Backing + force-side formula Reset Defense uses for every
+  // other defender). getDownfieldDefenderAngle()/snapDefenderToDownfieldPosition()
+  // below are shared with resetDefense() so both paths always agree.
+  function getDownfieldDefenderAngle(target, mark = getActiveToggleValue('markToggle'), downfield = getActiveToggleValue('downfieldToggle')) {
+    if (DEFENCE_SETUP_STYLE == "fixed") {
+      // Fixed left/right corner for the mark defender, regardless of disc position
+      if (mark === 'force-backhand' && downfield === 'backing') return ORIENTATION_ANGLES['top-left'];
+      if (mark === 'force-backhand' && downfield === 'fronting') return ORIENTATION_ANGLES['bottom-left'];
+      if (mark === 'force-flick' && downfield === 'backing') return ORIENTATION_ANGLES['top-right'];
+      if (mark === 'force-flick' && downfield === 'fronting') return ORIENTATION_ANGLES['bottom-right'];
+      return TOP_RIGHT_ANGLE; // shouldn't happen: toggles always have one active value
+    }
+    const targetCenter = getCenterPx(target);
+    const discCenter = getCenterPx(disc);
+    const frontAngle = Math.atan2(discCenter.y - targetCenter.y, discCenter.x - targetCenter.x);
+    return downfield === 'fronting' ? frontAngle : frontAngle + Math.PI;
+  }
+
+  function snapDefenderToDownfieldPosition(d, target) {
+    snapDefenderToPlayer(d, target, getDownfieldDefenderAngle(target));
+  }
+
+  function updateMarkDefenderForDiscHolder(target, previousHolder = null) {
+    let markDefender = null;
+    let previousMarkDefender = null;
+    defenders.forEach(d => {
+      const info = attachments.get(d);
+      if (!info) return;
+      if (info.target === target) markDefender = d;
+      else if (previousHolder && info.target === previousHolder) previousMarkDefender = d;
+    });
+    // The old holder's defender falls back to a normal (non-mark) defender
+    // position now that its player no longer has the disc.
+    if (previousMarkDefender && previousHolder !== target) {
+      snapDefenderToDownfieldPosition(previousMarkDefender, previousHolder);
+    }
+    if (markDefender) {
+      snapDefenderToPlayer(markDefender, target, getDiscDefenderSnapAngle());
+    }
+    if (previousMarkDefender || markDefender) {
+      updateDefenderFacings();
+    }
+  }
+
   function snapDiscToPlayer(target, angle = getDiscSnapAngle()) {
+    const previousHolder = getDiscHolderPlayer(); // capture before disc re-attaches below
     const discCenter = getCenterPx(disc);
     const tc = getCenterPx(target);
     const offsetDist = tc.radius + discCenter.radius + DISC_GAP;
     setCenterPx(disc, tc.x + Math.cos(angle) * offsetDist, tc.y + Math.sin(angle) * offsetDist);
     attach(disc, target); // group with it: it'll be carried along whenever that player moves
+    updateMarkDefenderForDiscHolder(target, previousHolder);
   }
 
   function snapDiscToNearestOffense() {
@@ -1546,13 +1660,6 @@
   // stays where it is so the disc-side defender does not get repositioned by the
   // fronting/backing reset.
 
-  const ORIENTATION_ANGLES = {
-    'top-right': -Math.PI / 4,
-    'top-left': -3 * Math.PI / 4,
-    'bottom-right': Math.PI / 4,
-    'bottom-left': 3 * Math.PI / 4
-  };
-
   const DEFENCE_SETUP_STYLE = "fixed"; // "fixed" or "dynamic"
 
   function wireToggleGroup(containerId, onChange) {
@@ -1621,26 +1728,7 @@
         return;
       }
       
-      if (DEFENCE_SETUP_STYLE == "fixed") {
-        // Fixed left/right corner for the mark defender, regardless of disc position
-        if (mark === 'force-backhand' && downfield === 'backing') {
-          snapDefenderToPlayer(d, target, ORIENTATION_ANGLES['top-left']);
-        } else if (mark === 'force-backhand' && downfield === 'fronting') {
-          snapDefenderToPlayer(d, target, ORIENTATION_ANGLES['bottom-left']);
-        } else if (mark === 'force-flick' && downfield === 'backing') {
-          snapDefenderToPlayer(d, target, ORIENTATION_ANGLES['top-right']);
-        } else if (mark === 'force-flick' && downfield === 'fronting') {
-          snapDefenderToPlayer(d, target, ORIENTATION_ANGLES['bottom-right']);
-        }
-        return;
-      } else {
-        const targetCenter = getCenterPx(target);
-        const discCenter = getCenterPx(disc);
-        const frontAngle = Math.atan2(discCenter.y - targetCenter.y, discCenter.x - targetCenter.x);
-        const angle = downfield === 'fronting' ? frontAngle : frontAngle + Math.PI;
-
-        snapDefenderToPlayer(d, target, angle);
-      }
+      snapDefenderToPlayer(d, target, getDownfieldDefenderAngle(target, mark, downfield));
     });
 
     updateDefenderFacings();
