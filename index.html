@@ -872,9 +872,9 @@
   }
 
   // --- multi-select: right-click-drag marquee, shift+click, ESC, left-click on
-  // empty field, and dragging a selected item carries the rest of the selection
-  // along with it. Players and defenders share one selection set so a group can
-  // mix both.
+  // empty field, left-drag on empty field, and dragging a selected item carries
+  // the rest of the selection along with it. Players and defenders share one
+  // selection set so a group can mix both.
 
   const selectedItems = new Set();
   let lastGroupDragLeft = null;
@@ -925,7 +925,14 @@
       e.preventDefault();
       return;
     }
-    if (!e.target.closest('.player, .defender, .disc')) clearSelection();
+    if (e.target.closest('.player, .defender, .disc')) return;
+    if (!e.shiftKey) clearSelection();
+    marqueePending = true;
+    marqueePointerId = e.pointerId;
+    marqueeStartX = e.clientX;
+    marqueeStartY = e.clientY;
+    marqueeAdditive = e.shiftKey;
+    e.preventDefault();
   });
 
   function onSelectableDragStart(el) {
@@ -1577,21 +1584,36 @@
 
   document.getElementById('resetDefenseBtn').addEventListener('click', resetDefense);
 
-  // --- right-click-drag marquee selection ---
+  // --- marquee selection ---
   // Standard CAD/Bluebeam convention: dragging left-to-right is a "window"
   // select -- only items fully CONTAINED in the rectangle qualify; dragging
   // right-to-left is a "crossing" select -- any item the rectangle TOUCHES at
-  // all qualifies. Shift held at drag-start adds to the existing selection
-  // instead of replacing it. Selectable items are players (circles) and
-  // defenders (rectangles); each gets the geometrically appropriate test.
+  // all qualifies. Right-click or left-drag on empty field starts the marquee.
+  // Shift held at drag-start adds to the existing selection instead of
+  // replacing it. Selectable items are players (circles) and defenders
+  // (rectangles); each gets the geometrically appropriate test.
 
   const selectionRectEl = document.getElementById('selectionRect');
   let marqueeActive = false;
+  let marqueePending = false;
+  let marqueePointerId = null;
   let marqueeStartX = 0;
   let marqueeStartY = 0;
   let marqueeAdditive = false;
+  const MARQUEE_START_DISTANCE_PX = 4;
 
   wrap.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  function startMarqueeSelection(e, additive) {
+    marqueePending = false;
+    marqueeActive = true;
+    marqueePointerId = e.pointerId;
+    marqueeAdditive = additive;
+    marqueeStartX = e.clientX;
+    marqueeStartY = e.clientY;
+    selectionRectEl.style.display = 'block';
+    updateMarqueeRect(e.clientX, e.clientY);
+  }
 
   function updateMarqueeRect(curX, curY) {
     const wrapRect = wrap.getBoundingClientRect();
@@ -1604,17 +1626,19 @@
 
   wrap.addEventListener('pointerdown', (e) => {
     if (e.button !== 2) return;
-    marqueeActive = true;
-    marqueeAdditive = e.shiftKey;
-    marqueeStartX = e.clientX;
-    marqueeStartY = e.clientY;
-    selectionRectEl.style.display = 'block';
-    updateMarqueeRect(e.clientX, e.clientY);
+    startMarqueeSelection(e, e.shiftKey);
     e.preventDefault();
   });
 
   window.addEventListener('pointermove', (e) => {
-    if (!marqueeActive) return;
+    if (marqueePending && e.pointerId === marqueePointerId) {
+      const dx = e.clientX - marqueeStartX;
+      const dy = e.clientY - marqueeStartY;
+      if ((dx * dx) + (dy * dy) >= (MARQUEE_START_DISTANCE_PX * MARQUEE_START_DISTANCE_PX)) {
+        startMarqueeSelection(e, marqueeAdditive);
+      }
+    }
+    if (!marqueeActive || e.pointerId !== marqueePointerId) return;
     updateMarqueeRect(e.clientX, e.clientY);
   });
 
@@ -1646,8 +1670,14 @@
   }
 
   window.addEventListener('pointerup', (e) => {
-    if (!marqueeActive) return;
+    if (marqueePending && e.pointerId === marqueePointerId && !marqueeActive) {
+      marqueePending = false;
+      marqueePointerId = null;
+      return;
+    }
+    if (!marqueeActive || e.pointerId !== marqueePointerId) return;
     marqueeActive = false;
+    marqueePointerId = null;
     selectionRectEl.style.display = 'none';
     selectionRectEl.classList.remove('contain-mode');
 
@@ -1667,6 +1697,18 @@
     });
 
     updateSelectionVisuals();
+  });
+
+  window.addEventListener('pointercancel', (e) => {
+    if (marqueePending && e.pointerId === marqueePointerId) {
+      marqueePending = false;
+      marqueePointerId = null;
+    }
+    if (!marqueeActive || e.pointerId !== marqueePointerId) return;
+    marqueeActive = false;
+    marqueePointerId = null;
+    selectionRectEl.style.display = 'none';
+    selectionRectEl.classList.remove('contain-mode');
   });
 
   // --- arrow keys move the disc ---
